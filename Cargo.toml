@@ -1,0 +1,22 @@
+[package]
+authors = ["Dawid Ciężarkiewicz <dpc@dpc.pw>"]
+edition = "2018"
+name = "rust-bitcoin-indexer"
+version = "0.1.0"
+
+[[bench]]
+harness = false
+name = "bitcoincore_rpc"
+
+[dependencies]
+bitcoin = "*"
+common_failures = "*"
+hex = "*"
+
+[dependencies.bitcoin-rpc]
+#path = "rust-bitcoin-rpc"
+git = "https://github.com/dpc/rust-bitcoin-rpc/"
+branch = "dpc-dev"
+
+[dev-dependencies]
+criterion = "0.2"
