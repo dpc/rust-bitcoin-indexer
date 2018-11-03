@@ -1,6 +1,6 @@
-use bitcoin::util::hash::Sha256dHash;
 use bitcoin_rpc::BitcoinRpc;
 use common_failures::prelude::*;
+use crate::types::*;
 use std::collections::BTreeMap;
 
 pub mod bitcoin_core {
@@ -20,15 +20,17 @@ pub mod bitcoin_core {
     };
 }
 
-pub type BlockHeight = u64;
-pub type BlockHash = Sha256dHash;
-
 pub trait DataStore {
     fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>>;
+    fn get_min_height(&self) -> Result<Option<BlockHeight>>;
+    fn get_max_height(&self) -> Result<Option<BlockHeight>>;
+    fn get_by_height(&self, height: BlockHeight) -> Result<Option<Block>>;
     fn revert_head(&mut self) -> Result<()>;
+    fn revert_by_height(&mut self, height: BlockHeight) -> Result<()>;
     fn insert(&mut self, height: u64, block: Block) -> Result<()>;
 }
 
+#[derive(Clone)]
 pub struct Block {
     pub hash: BlockHash,
     pub height: BlockHeight,
@@ -36,7 +38,19 @@ pub struct Block {
 }
 
 impl Block {
-    pub fn from_hex(hash: Sha256dHash, height: u64, hex: &str) -> Result<Self> {
+    pub fn from_core_block(
+        hash: BlockHash,
+        height: BlockHeight,
+        block: &bitcoin_core::Block,
+    ) -> Self {
+        Block {
+            hash,
+            height,
+            prev_hash: block.header.prev_blockhash,
+        }
+    }
+
+    pub fn from_hex(hash: BlockHash, height: u64, hex: &str) -> Result<Self> {
         let bytes = hex::decode(hex)?;
         let block: bitcoin_core::Block = bitcoin_core::deserialize(&bytes)?;
         Ok(Block {
@@ -79,8 +93,23 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
+    fn revert_by_height(&mut self, height: BlockHeight) -> Result<()> {
+        self.blocks.remove(&height);
+        Ok(())
+    }
     fn insert(&mut self, height: u64, block: Block) -> Result<()> {
         self.blocks.insert(height, block);
         Ok(())
+    }
+
+    fn get_min_height(&self) -> Result<Option<BlockHeight>> {
+        Ok(self.blocks.keys().next().cloned())
+    }
+
+    fn get_max_height(&self) -> Result<Option<BlockHeight>> {
+        Ok(self.blocks.keys().next_back().cloned())
+    }
+    fn get_by_height(&self, height: BlockHeight) -> Result<Option<Block>> {
+        Ok(self.blocks.get(&height).cloned())
     }
 }

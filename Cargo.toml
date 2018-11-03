@@ -12,6 +12,7 @@ name = "bitcoincore_rpc"
 bitcoin = "*"
 common_failures = "*"
 hex = "*"
+crossbeam-channel = "*"
 
 [dependencies.bitcoin-rpc]
 #path = "rust-bitcoin-rpc"

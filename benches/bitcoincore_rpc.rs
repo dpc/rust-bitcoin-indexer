@@ -11,11 +11,13 @@ fn get_rpc() -> bitcoin_rpc::BitcoinRpc {
     )
 }
 
+const BLOCK_HASH = "00000000000000000013e7c4a60f1aa0e07ed1efb08accbe684602f7bdc7385f";
+
 fn get_block(c: &mut Criterion) {
     c.bench_function("getblock", |b| {
         let rpc = get_rpc();
         let hash = Sha256dHash::from_hex(
-            "0000000000000000001abb976a4588f51eb40e3bc6c4cfbbfdd958e72c166110",
+            BLOCK_HASH,
         )
         .unwrap();
 
@@ -24,7 +26,7 @@ fn get_block(c: &mut Criterion) {
     c.bench_function("getblock_verbose", |b| {
         let rpc = get_rpc();
         let hash = Sha256dHash::from_hex(
-            "0000000000000000001abb976a4588f51eb40e3bc6c4cfbbfdd958e72c166110",
+            BLOCK_HASH,
         )
         .unwrap();
 
