@@ -1,4 +1,5 @@
 use bitcoin::util::hash::Sha256dHash;
+pub use default::default;
 
 pub mod bitcoin_core {
     pub use bitcoin::{
@@ -17,15 +18,12 @@ pub mod bitcoin_core {
     };
 }
 
-pub fn default<T: Default>() -> T {
-    std::default::Default::default() // gosh, that's a lot of default, isn't it?
-}
-
 pub type BlockHeight = u64;
 pub type BlockHash = Sha256dHash;
 pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 
+#[derive(Clone, Debug)]
 pub struct RpcInfo {
     pub url: String,
     pub user: Option<String>,

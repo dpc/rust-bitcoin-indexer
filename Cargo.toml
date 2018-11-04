@@ -13,11 +13,13 @@ bitcoin = "*"
 common_failures = "*"
 hex = "*"
 crossbeam-channel = "*"
+structopt = "*"
+default = "*"
 
 [dependencies.bitcoin-rpc]
-#path = "rust-bitcoin-rpc"
-git = "https://github.com/dpc/rust-bitcoin-rpc/"
-branch = "dpc-dev"
+path = "../rust-bitcoin-rpc"
+#git = "https://github.com/dpc/rust-bitcoin-rpc/"
+#branch = "dpc-dev"
 
 [dev-dependencies]
 criterion = "0.2"

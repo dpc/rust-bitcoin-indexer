@@ -1,5 +1,5 @@
 use common_failures::prelude::*;
-use crate::types::*;
+use crate::prelude::*;
 use std::{
     collections::HashMap,
     sync::{
@@ -14,7 +14,7 @@ fn retry<T>(f: impl Fn() -> Result<T>) -> T {
         match f() {
             Err(e) => {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                eprintln!("Error: {}; retrying ...", e);
+                eprintln!("{}; retrying ...", e.display_causes_and_backtrace());
             }
             Ok(t) => {
                 return t;
@@ -53,7 +53,7 @@ pub struct Prefetcher {
 }
 
 impl Prefetcher {
-    pub fn new(rpc_info: RpcInfo, start: u64) -> Result<Self> {
+    pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
         let thread_num = 8 * 3;
         let (tx, rx) = crossbeam_channel::bounded(thread_num);
         let workers_finish = sync::Arc::new(AtomicBool::new(false));
@@ -61,7 +61,7 @@ impl Prefetcher {
         let mut s = Self {
             rx,
             tx,
-            rpc_info,
+            rpc_info: rpc_info.to_owned(),
             thread_joins: default(),
             thread_num,
             cur_height: start,

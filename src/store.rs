@@ -1,6 +1,6 @@
 use bitcoin_rpc::BitcoinRpc;
 use common_failures::prelude::*;
-use crate::types::*;
+use crate::prelude::*;
 use std::collections::BTreeMap;
 
 pub mod bitcoin_core {
