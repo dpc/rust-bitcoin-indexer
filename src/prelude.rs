@@ -22,6 +22,8 @@ pub type BlockHeight = u64;
 pub type BlockHash = Sha256dHash;
 pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
+pub type TxHash = Sha256dHash;
+pub type TxHex = String;
 
 #[derive(Clone, Debug)]
 pub struct RpcInfo {

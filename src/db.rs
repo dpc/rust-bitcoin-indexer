@@ -20,21 +20,35 @@ pub mod bitcoin_core {
     };
 }
 
+// TODO: Some of these are unnecessary
 pub trait DataStore {
     fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>>;
     fn get_min_height(&self) -> Result<Option<BlockHeight>>;
     fn get_max_height(&self) -> Result<Option<BlockHeight>>;
-    fn get_by_height(&self, height: BlockHeight) -> Result<Option<Block>>;
     fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
-    fn insert(&mut self, height: u64, block: Block) -> Result<()>;
+    fn insert(&mut self, height: u64, hash: BlockHash, block: BitcoinCoreBlock) -> Result<()>;
 }
 
 #[derive(Clone)]
-pub struct Block {
-    pub hash: BlockHash,
+struct Block {
     pub height: BlockHeight,
+    pub hash: BlockHash,
     pub prev_hash: BlockHash,
+}
+
+#[derive(Clone)]
+struct Tx {
+    pub height: BlockHeight,
+    pub hash: TxHash,
+}
+
+#[derive(Clone)]
+struct Utxo {
+    pub height: BlockHeight,
+    pub tx: TxHash,
+    pub idx: u32,
+    pub creation: bool,
 }
 
 impl Block {
@@ -66,6 +80,7 @@ impl Block {
         Block::from_hex(block_hash, height, &block_hex)
     }
 }
+
 #[derive(Default)]
 pub struct MemDataStore {
     blocks: BTreeMap<BlockHeight, Block>,
@@ -104,7 +119,8 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
-    fn insert(&mut self, height: u64, block: Block) -> Result<()> {
+    fn insert(&mut self, height: u64, hash: BlockHash, block: BitcoinCoreBlock) -> Result<()> {
+        let block = Block::from_core_block(height, hash, &block);
         self.blocks.insert(height, block);
         Ok(())
     }
@@ -115,8 +131,5 @@ impl DataStore for MemDataStore {
 
     fn get_max_height(&self) -> Result<Option<BlockHeight>> {
         Ok(self.blocks.keys().next_back().cloned())
-    }
-    fn get_by_height(&self, height: BlockHeight) -> Result<Option<Block>> {
-        Ok(self.blocks.get(&height).cloned())
     }
 }

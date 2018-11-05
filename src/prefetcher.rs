@@ -10,11 +10,15 @@ use std::{
 
 fn retry<T>(f: impl Fn() -> Result<T>) -> T {
     let delay_ms = 2000;
+    let mut count = 0;
     loop {
         match f() {
             Err(e) => {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                eprintln!("{}; retrying ...", e.display_causes_and_backtrace());
+                if count % 600 == 0 {
+                    eprintln!("{}; retrying ...", e.display_causes_and_backtrace());
+                }
+                count += 1;
             }
             Ok(t) => {
                 return t;
@@ -41,8 +45,7 @@ type PrefetcherItem = (BlockHeight, BlockHash, BitcoinCoreBlock);
 /// ```
 ///
 pub struct Prefetcher {
-    tx: crossbeam_channel::Sender<PrefetcherItem>,
-    rx: crossbeam_channel::Receiver<PrefetcherItem>,
+    rx: Option<crossbeam_channel::Receiver<PrefetcherItem>>,
     thread_joins: Vec<std::thread::JoinHandle<()>>,
     out_of_order_items: HashMap<BlockHeight, (BlockHash, BitcoinCoreBlock)>,
     cur_height: BlockHeight,
@@ -50,17 +53,19 @@ pub struct Prefetcher {
     workers_finish: sync::Arc<AtomicBool>,
     thread_num: usize,
     rpc_info: RpcInfo,
+    end_of_fast_sync: u64,
 }
 
 impl Prefetcher {
     pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
         let thread_num = 8 * 3;
-        let (tx, rx) = crossbeam_channel::bounded(thread_num);
         let workers_finish = sync::Arc::new(AtomicBool::new(false));
 
+        let rpc = rpc_info.to_rpc_client();
+        let end_of_fast_sync = retry(|| Ok(rpc.getblockcount()?));
+
         let mut s = Self {
-            rx,
-            tx,
+            rx: None,
             rpc_info: rpc_info.to_owned(),
             thread_joins: default(),
             thread_num,
@@ -68,6 +73,7 @@ impl Prefetcher {
             out_of_order_items: default(),
             workers_finish,
             prev_hashes: default(),
+            end_of_fast_sync,
         };
 
         s.start_workers();
@@ -77,41 +83,46 @@ impl Prefetcher {
     fn stop_workers(&mut self) {
         self.workers_finish.store(true, Ordering::SeqCst);
 
-        while let Ok(_) = self.rx.recv() {}
+        while let Ok(_) = self
+            .rx
+            .as_ref()
+            .expect("start_workers called before stop_workers")
+            .recv()
+        {}
 
+        self.rx = None;
         self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
+        self.out_of_order_items.clear();
     }
 
     fn start_workers(&mut self) {
         self.workers_finish.store(false, Ordering::SeqCst);
 
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num);
+        self.rx = Some(rx);
         let current = sync::Arc::new(AtomicUsize::new(self.cur_height as usize));
-        for thread_i in 0..self.thread_num {
+        assert!(self.thread_joins.is_empty());
+        for _ in 0..self.thread_num {
             self.thread_joins.push({
                 std::thread::spawn({
                     let current = current.clone();
                     let rpc = self.rpc_info.to_rpc_client();
-                    let tx = self.tx.clone();
+                    let tx = tx.clone();
                     let workers_finish = self.workers_finish.clone();
                     move || {
-                        let end = retry(|| Ok(rpc.getblockcount()?));
-
-                        while !workers_finish.load(Ordering::Relaxed) {
+                        while !workers_finish.load(Ordering::SeqCst) {
                             let height = current.fetch_add(1, Ordering::Relaxed) as u64;
 
-                            if thread_i > 0 && height >= end {
-                                return;
-                            }
-
-                            let (hash, block) = retry(|| {
-                                let hash = rpc.get_blockhash(height)?;
-                                let hex = rpc.get_block(&hash)?;
-
-                                let bytes = hex::decode(hex)?;
-                                let block: BitcoinCoreBlock = bitcoin_core::deserialize(&bytes)?;
-                                Ok((hash, block))
+                            let item = retry(|| {
+                                Ok(if workers_finish.load(Ordering::SeqCst) {
+                                    None
+                                } else {
+                                    Some(get_block_by_height(&rpc, height)?)
+                                })
                             });
-                            tx.send((height, hash, block));
+                            if let Some(item) = item {
+                                tx.send(item);
+                            }
                         }
                     }
                 })
@@ -135,10 +146,9 @@ impl Prefetcher {
         self.prev_hashes.insert(item.0, item.1.clone());
         // this is how big reorgs we're going to detect
         let window_size = 100;
-        if self.cur_height > window_size {
-            self.prev_hashes.remove(&(self.cur_height - window_size));
-        }
-        debug_assert!(self.prev_hashes.len() <= window_size as usize);
+        self.prev_hashes
+            .remove(&(self.cur_height.saturating_sub(window_size)));
+        assert!(self.prev_hashes.len() <= window_size as usize);
 
         false
     }
@@ -159,6 +169,13 @@ impl Prefetcher {
 impl Iterator for Prefetcher {
     type Item = PrefetcherItem;
     fn next(&mut self) -> Option<Self::Item> {
+        if self.end_of_fast_sync == self.cur_height {
+            println!("End of fast sync at {}H", self.cur_height);
+            self.stop_workers();
+            self.thread_num = 1;
+            self.start_workers();
+        }
+
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
                 let item = (self.cur_height, item.0, item.1);
@@ -171,7 +188,12 @@ impl Iterator for Prefetcher {
             }
 
             'wait_for_next_block: loop {
-                let item = self.rx.recv().expect("Workers shouldn't disconnect");
+                let item = self
+                    .rx
+                    .as_ref()
+                    .expect("rx available")
+                    .recv()
+                    .expect("Workers shouldn't disconnect");
                 if item.0 == self.cur_height {
                     if self.detected_reorg(&item) {
                         self.reset_on_reorg();
@@ -180,6 +202,7 @@ impl Iterator for Prefetcher {
                     self.cur_height += 1;
                     return Some(item);
                 } else {
+                    assert!(item.0 > self.cur_height);
                     self.out_of_order_items.insert(item.0, (item.1, item.2));
                 }
             }
@@ -191,4 +214,16 @@ impl Drop for Prefetcher {
     fn drop(&mut self) {
         self.stop_workers();
     }
+}
+
+fn get_block_by_height(
+    rpc: &bitcoin_rpc::BitcoinRpc,
+    height: BlockHeight,
+) -> Result<PrefetcherItem> {
+    let hash = rpc.get_blockhash(height)?;
+    let hex = rpc.get_block(&hash)?;
+
+    let bytes = hex::decode(hex)?;
+    let block: BitcoinCoreBlock = bitcoin_core::deserialize(&bytes)?;
+    Ok((height, hash, block))
 }
