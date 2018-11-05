@@ -15,6 +15,11 @@ hex = "*"
 crossbeam-channel = "*"
 structopt = "*"
 default = "*"
+diesel = { version = "1", features = ["postgres", "chrono"] }
+#diesel_infer_schema = { version = "1", features = ["postgres"] }
+#diesel_codegen = { version = "*", features = ["postgres"] }
+r2d2 = "*"
+r2d2-diesel = "*"
 
 [dependencies.bitcoin-rpc]
 path = "../rust-bitcoin-rpc"

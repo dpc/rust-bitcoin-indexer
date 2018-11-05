@@ -77,7 +77,7 @@ impl Prefetcher {
     fn stop_workers(&mut self) {
         self.workers_finish.store(true, Ordering::SeqCst);
 
-        while let Some(_) = self.rx.recv() {}
+        while let Ok(_) = self.rx.recv() {}
 
         self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
     }
@@ -171,17 +171,16 @@ impl Iterator for Prefetcher {
             }
 
             'wait_for_next_block: loop {
-                if let Some(item) = self.rx.recv() {
-                    if item.0 == self.cur_height {
-                        if self.detected_reorg(&item) {
-                            self.reset_on_reorg();
-                            continue 'retry_on_reorg;
-                        }
-                        self.cur_height += 1;
-                        return Some(item);
-                    } else {
-                        self.out_of_order_items.insert(item.0, (item.1, item.2));
+                let item = self.rx.recv().expect("Workers shouldn't disconnect");
+                if item.0 == self.cur_height {
+                    if self.detected_reorg(&item) {
+                        self.reset_on_reorg();
+                        continue 'retry_on_reorg;
                     }
+                    self.cur_height += 1;
+                    return Some(item);
+                } else {
+                    self.out_of_order_items.insert(item.0, (item.1, item.2));
                 }
             }
         }
