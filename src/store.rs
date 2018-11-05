@@ -25,8 +25,8 @@ pub trait DataStore {
     fn get_min_height(&self) -> Result<Option<BlockHeight>>;
     fn get_max_height(&self) -> Result<Option<BlockHeight>>;
     fn get_by_height(&self, height: BlockHeight) -> Result<Option<Block>>;
-    fn revert_head(&mut self) -> Result<()>;
-    fn revert_by_height(&mut self, height: BlockHeight) -> Result<()>;
+    fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>>;
+    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
     fn insert(&mut self, height: u64, block: Block) -> Result<()>;
 }
 
@@ -39,8 +39,8 @@ pub struct Block {
 
 impl Block {
     pub fn from_core_block(
-        hash: BlockHash,
         height: BlockHeight,
+        hash: BlockHash,
         block: &bitcoin_core::Block,
     ) -> Self {
         Block {
@@ -69,15 +69,20 @@ impl Block {
 #[derive(Default)]
 pub struct MemDataStore {
     blocks: BTreeMap<BlockHeight, Block>,
+    block_hashes: BTreeMap<BlockHeight, BlockHash>,
 }
 
 impl MemDataStore {
     pub fn new() -> Self {
-        Default::default()
+        default()
     }
 }
 
 impl DataStore for MemDataStore {
+    fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>> {
+        Ok(self.block_hashes.get(&height).cloned())
+    }
+
     fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>> {
         Ok(self
             .blocks
@@ -86,17 +91,19 @@ impl DataStore for MemDataStore {
             .map(|(k, v)| (*k, v.hash.clone())))
     }
 
-    fn revert_head(&mut self) -> Result<()> {
-        let top = self.blocks.keys().next_back().unwrap().clone();
-        self.blocks.remove(&top);
+    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
+        for height in height.. {
+            if self.blocks.remove(&height).is_none() {
+                break;
+            }
+            self.block_hashes
+                .remove(&height)
+                .expect("block_hashes out of sync");
+        }
 
         Ok(())
     }
 
-    fn revert_by_height(&mut self, height: BlockHeight) -> Result<()> {
-        self.blocks.remove(&height);
-        Ok(())
-    }
     fn insert(&mut self, height: u64, block: Block) -> Result<()> {
         self.blocks.insert(height, block);
         Ok(())
