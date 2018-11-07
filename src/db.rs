@@ -1,3 +1,5 @@
+pub mod mem;
+
 use bitcoin_rpc::BitcoinRpc;
 use common_failures::prelude::*;
 use crate::prelude::*;
@@ -20,116 +22,85 @@ pub mod bitcoin_core {
     };
 }
 
-// TODO: Some of these are unnecessary
 pub trait DataStore {
-    fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>>;
-    fn get_min_height(&self) -> Result<Option<BlockHeight>>;
     fn get_max_height(&self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
-    fn insert(&mut self, height: u64, hash: BlockHash, block: BitcoinCoreBlock) -> Result<()>;
+    fn insert(&mut self, info: &BlockInfo) -> Result<()>;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Block {
     pub height: BlockHeight,
     pub hash: BlockHash,
     pub prev_hash: BlockHash,
 }
 
-#[derive(Clone)]
+impl Block {
+    pub fn from_core_block(info: &BlockInfo) -> Self {
+        Block {
+            height: info.height,
+            hash: info.hash,
+            prev_hash: info.block.header.prev_blockhash,
+        }
+    }
+}
+#[derive(Debug, Clone)]
 struct Tx {
     pub height: BlockHeight,
     pub hash: TxHash,
 }
 
-#[derive(Clone)]
+impl Tx {
+    pub fn from_core_block(info: &BlockInfo, tx: &bitcoin_core::Transaction) -> Self {
+        Self {
+            height: info.height,
+            hash: tx.txid(),
+        }
+    }
+}
+#[derive(Debug, Clone)]
 struct Utxo {
     pub height: BlockHeight,
     pub tx: TxHash,
-    pub idx: u32,
-    pub creation: bool,
+    pub idx: u16,
+    pub value: u64,
 }
 
-impl Block {
+impl Utxo {
     pub fn from_core_block(
-        height: BlockHeight,
-        hash: BlockHash,
-        block: &bitcoin_core::Block,
+        info: &BlockInfo,
+        tx: &bitcoin_core::Transaction,
+        idx: u16,
+        tx_out: &bitcoin_core::TxOut,
     ) -> Self {
-        Block {
-            hash,
-            height,
-            prev_hash: block.header.prev_blockhash,
+        Self {
+            height: info.height,
+            tx: tx.txid(),
+            idx,
+            value: tx_out.value,
         }
     }
-
-    pub fn from_hex(hash: BlockHash, height: u64, hex: &str) -> Result<Self> {
-        let bytes = hex::decode(hex)?;
-        let block: bitcoin_core::Block = bitcoin_core::deserialize(&bytes)?;
-        Ok(Block {
-            hash,
-            height,
-            prev_hash: block.header.prev_blockhash,
-        })
-    }
-
-    pub fn fetch_by_height(rpc: &BitcoinRpc, height: u64) -> Result<Self> {
-        let block_hash = rpc.get_blockhash(height)?;
-        let block_hex = rpc.get_block(&block_hash)?;
-        Block::from_hex(block_hash, height, &block_hex)
-    }
+}
+/// Created when Utxo is spent, referencing it
+#[derive(Debug, Clone)]
+struct Spend {
+    pub height: BlockHeight,
+    pub tx: TxHash,
+    pub idx: u16,
 }
 
-#[derive(Default)]
-pub struct MemDataStore {
-    blocks: BTreeMap<BlockHeight, Block>,
-    block_hashes: BTreeMap<BlockHeight, BlockHash>,
-}
+fn parse_node_block(info: &BlockInfo) -> Result<()> {
+    let mut utxos: Vec<Utxo> = vec![];
+    let mut spends: Vec<Spend> = vec![];
+    let mut txs: Vec<Tx> = vec![];
+    let block = Block::from_core_block(info);
 
-impl MemDataStore {
-    pub fn new() -> Self {
-        default()
-    }
-}
-
-impl DataStore for MemDataStore {
-    fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>> {
-        Ok(self.block_hashes.get(&height).cloned())
-    }
-
-    fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>> {
-        Ok(self
-            .blocks
-            .iter()
-            .next_back()
-            .map(|(k, v)| (*k, v.hash.clone())))
-    }
-
-    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
-        for height in height.. {
-            if self.blocks.remove(&height).is_none() {
-                break;
-            }
-            self.block_hashes
-                .remove(&height)
-                .expect("block_hashes out of sync");
+    for tx in &info.block.txdata {
+        txs.push(Tx::from_core_block(info, &tx));
+        for (idx, tx_out) in tx.output.iter().enumerate() {
+            utxos.push(Utxo::from_core_block(info, &tx, idx as u16, tx_out))
         }
-
-        Ok(())
     }
-
-    fn insert(&mut self, height: u64, hash: BlockHash, block: BitcoinCoreBlock) -> Result<()> {
-        let block = Block::from_core_block(height, hash, &block);
-        self.blocks.insert(height, block);
-        Ok(())
-    }
-
-    fn get_min_height(&self) -> Result<Option<BlockHeight>> {
-        Ok(self.blocks.keys().next().cloned())
-    }
-
-    fn get_max_height(&self) -> Result<Option<BlockHeight>> {
-        Ok(self.blocks.keys().next_back().cloned())
-    }
+    unimplemented!();
 }

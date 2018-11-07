@@ -27,7 +27,7 @@ fn retry<T>(f: impl Fn() -> Result<T>) -> T {
     }
 }
 
-type PrefetcherItem = (BlockHeight, BlockHash, BitcoinCoreBlock);
+type PrefetcherItem = BlockInfo;
 
 /// An iterator that yields blocks
 ///
@@ -138,12 +138,12 @@ impl Prefetcher {
     fn detected_reorg(&mut self, item: &PrefetcherItem) -> bool {
         if self.cur_height == 0 {
             if let Some(prev_hash) = self.prev_hashes.get(&(self.cur_height - 1)) {
-                if prev_hash != &item.1 {
+                if prev_hash != &item.hash {
                     return true;
                 }
             }
         }
-        self.prev_hashes.insert(item.0, item.1.clone());
+        self.prev_hashes.insert(item.height, item.hash.clone());
         // this is how big reorgs we're going to detect
         let window_size = 100;
         self.prev_hashes
@@ -178,13 +178,17 @@ impl Iterator for Prefetcher {
 
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
-                let item = (self.cur_height, item.0, item.1);
-                if self.detected_reorg(&item) {
+                let binfo = BlockInfo {
+                    height: self.cur_height,
+                    hash: item.0,
+                    block: item.1,
+                };
+                if self.detected_reorg(&binfo) {
                     self.reset_on_reorg();
                     continue 'retry_on_reorg;
                 }
                 self.cur_height += 1;
-                return Some(item);
+                return Some(binfo);
             }
 
             'wait_for_next_block: loop {
@@ -194,7 +198,7 @@ impl Iterator for Prefetcher {
                     .expect("rx available")
                     .recv()
                     .expect("Workers shouldn't disconnect");
-                if item.0 == self.cur_height {
+                if item.height == self.cur_height {
                     if self.detected_reorg(&item) {
                         self.reset_on_reorg();
                         continue 'retry_on_reorg;
@@ -202,8 +206,9 @@ impl Iterator for Prefetcher {
                     self.cur_height += 1;
                     return Some(item);
                 } else {
-                    assert!(item.0 > self.cur_height);
-                    self.out_of_order_items.insert(item.0, (item.1, item.2));
+                    assert!(item.height > self.cur_height);
+                    self.out_of_order_items
+                        .insert(item.height, (item.hash, item.block));
                 }
             }
         }
@@ -225,5 +230,9 @@ fn get_block_by_height(
 
     let bytes = hex::decode(hex)?;
     let block: BitcoinCoreBlock = bitcoin_core::deserialize(&bytes)?;
-    Ok((height, hash, block))
+    Ok(BlockInfo {
+        height,
+        hash,
+        block,
+    })
 }

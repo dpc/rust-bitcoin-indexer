@@ -33,23 +33,18 @@ impl Indexer {
         })
     }
 
-    fn process_block(
-        &mut self,
-        height: u64,
-        hash: BlockHash,
-        block: BitcoinCoreBlock,
-    ) -> Result<()> {
-        if height < self.starting_node_height || height % 1000 == 0 {
-            println!("Block {}H: {}", height, hash);
+    fn process_block(&mut self, binfo: &BlockInfo) -> Result<()> {
+        if binfo.height < self.starting_node_height || binfo.height % 1000 == 0 {
+            println!("Block {}H: {}", binfo.height, binfo.hash);
         }
 
-        if let Some(db_hash) = self.db.get_hash_by_height(height)? {
-            if db_hash != hash {
-                println!("Block {}H: {} - reorg", height, hash);
-                self.db.reorg_at_height(height);
+        if let Some(db_hash) = self.db.get_hash_by_height(binfo.height)? {
+            if db_hash != binfo.hash {
+                println!("Block {}H: {} - reorg", binfo.height, binfo.hash);
+                self.db.reorg_at_height(binfo.height);
             }
         }
-        self.db.insert(height, hash, block)?;
+        self.db.insert(binfo)?;
 
         Ok(())
     }
@@ -62,8 +57,8 @@ impl Indexer {
         let start_from_block = last_known_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
 
         let prefetcher = prefetcher::Prefetcher::new(&self.rpc_info, start_from_block)?;
-        for (height, hash, block) in prefetcher {
-            self.process_block(height, hash, block)?;
+        for item in prefetcher {
+            self.process_block(&item)?;
         }
 
         Ok(())
@@ -77,7 +72,7 @@ fn run() -> Result<()> {
         user: opts.node_rpc_user,
         password: opts.node_rpc_pass,
     };
-    let mut db = db::MemDataStore::new();
+    let mut db = db::mem::MemDataStore::default();
     let mut indexer = Indexer::new(rpc_info, db)?;
     indexer.run()
 }

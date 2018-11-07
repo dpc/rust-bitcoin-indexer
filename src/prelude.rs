@@ -25,6 +25,12 @@ pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 pub type TxHash = Sha256dHash;
 pub type TxHex = String;
 
+pub struct BlockInfo {
+    pub height: BlockHeight,
+    pub hash: BlockHash,
+    pub block: bitcoin_core::Block,
+}
+
 #[derive(Clone, Debug)]
 pub struct RpcInfo {
     pub url: String,
