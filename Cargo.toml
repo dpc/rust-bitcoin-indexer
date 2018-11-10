@@ -10,8 +10,11 @@ name = "bitcoincore_rpc"
 
 [dependencies]
 bitcoin = "0.15"
+bitcoin-bech32 = "*"
+bitcoincore-rpc = "0.1"
 common_failures = "*"
 hex = "*"
+secp256k1 = "*"
 crossbeam-channel = "*"
 structopt = "*"
 default = "*"
@@ -20,7 +23,6 @@ diesel = { version = "1", features = ["postgres", "chrono"] }
 #diesel_codegen = { version = "*", features = ["postgres"] }
 r2d2 = "*"
 r2d2-diesel = "*"
-bitcoincore-rpc = "0.1"
 
 [dev-dependencies]
 criterion = "0.2"
