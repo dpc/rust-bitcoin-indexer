@@ -46,7 +46,7 @@ impl Tx {
 struct Utxo {
     pub height: BlockHeight,
     pub tx: TxHash,
-    pub idx: u16,
+    pub idx: u32,
     pub value: u64,
     pub address: Option<String>,
 }
@@ -55,7 +55,7 @@ impl Utxo {
     pub fn from_core_block(
         info: &BlockInfo,
         tx: &bitcoin_core::Transaction,
-        idx: u16,
+        idx: u32,
         tx_out: &bitcoin_core::TxOut,
     ) -> Self {
         let network = bitcoin::network::constants::Network::Bitcoin;
@@ -80,7 +80,7 @@ impl Spend {
     pub fn from_core_block(
         info: &BlockInfo,
         _tx: &bitcoin_core::Transaction,
-        idx: u16,
+        idx: u32,
         tx_in: &bitcoin_core::TxIn,
     ) -> Self {
         Spend {
@@ -91,7 +91,7 @@ impl Spend {
     }
 }
 
-fn parse_node_block(info: &BlockInfo) -> Result<(Vec<Utxo>, Vec<Spend>, Vec<Tx>)> {
+fn parse_node_block(info: &BlockInfo) -> Result<(Block, Vec<Tx>, Vec<Utxo>, Vec<Spend>)> {
     let mut utxos: Vec<Utxo> = vec![];
     let mut spends: Vec<Spend> = vec![];
     let mut txs: Vec<Tx> = vec![];
@@ -100,12 +100,12 @@ fn parse_node_block(info: &BlockInfo) -> Result<(Vec<Utxo>, Vec<Spend>, Vec<Tx>)
     for tx in &info.block.txdata {
         txs.push(Tx::from_core_block(info, &tx));
         for (idx, tx_out) in tx.output.iter().enumerate() {
-            utxos.push(Utxo::from_core_block(info, &tx, idx as u16, tx_out))
+            utxos.push(Utxo::from_core_block(info, &tx, idx as u32, tx_out))
         }
         for (idx, tx_in) in tx.input.iter().enumerate() {
-            spends.push(Spend::from_core_block(info, &tx, idx as u16, tx_in));
+            spends.push(Spend::from_core_block(info, &tx, idx as u32, tx_in));
         }
     }
 
-    Ok((utxos, spends, txs))
+    Ok((block, txs, utxos, spends))
 }

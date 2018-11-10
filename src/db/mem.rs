@@ -34,8 +34,7 @@ impl DataStore for MemDataStore {
     }
 
     fn insert(&mut self, info: &BlockInfo) -> Result<()> {
-        let (utxo, spends, txs) = super::parse_node_block(&info)?;
-        let block = Block::from_core_block(info);
+        let (block, txs, utxo, spends) = super::parse_node_block(&info)?;
         self.blocks.insert(info.height, block);
         Ok(())
     }
