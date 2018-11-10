@@ -9,7 +9,7 @@ harness = false
 name = "bitcoincore_rpc"
 
 [dependencies]
-bitcoin = "*"
+bitcoin = "0.15"
 common_failures = "*"
 hex = "*"
 crossbeam-channel = "*"
@@ -20,11 +20,7 @@ diesel = { version = "1", features = ["postgres", "chrono"] }
 #diesel_codegen = { version = "*", features = ["postgres"] }
 r2d2 = "*"
 r2d2-diesel = "*"
-
-[dependencies.bitcoin-rpc]
-path = "../rust-bitcoin-rpc"
-#git = "https://github.com/dpc/rust-bitcoin-rpc/"
-#branch = "dpc-dev"
+bitcoincore-rpc = "0.1"
 
 [dev-dependencies]
 criterion = "0.2"

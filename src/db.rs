@@ -1,26 +1,9 @@
 pub mod mem;
 
-use bitcoin_rpc::BitcoinRpc;
+use bitcoincore_rpc::Client;
 use common_failures::prelude::*;
 use crate::prelude::*;
 use std::collections::BTreeMap;
-
-pub mod bitcoin_core {
-    pub use bitcoin::{
-        blockdata::{
-            block::Block,
-            transaction::{Transaction, TxOut},
-        },
-        network::{
-            encodable::ConsensusDecodable,
-            serialize::{deserialize, serialize_hex, RawDecoder},
-        },
-        util::{
-            hash::{Hash160, Sha256dHash},
-            privkey::Privkey,
-        },
-    };
-}
 
 pub trait DataStore {
     fn get_max_height(&self) -> Result<Option<BlockHeight>>;

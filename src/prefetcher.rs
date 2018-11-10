@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-fn retry<T>(f: impl Fn() -> Result<T>) -> T {
+fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     let delay_ms = 2000;
     let mut count = 0;
     loop {
@@ -61,8 +61,8 @@ impl Prefetcher {
         let thread_num = 8 * 3;
         let workers_finish = sync::Arc::new(AtomicBool::new(false));
 
-        let rpc = rpc_info.to_rpc_client();
-        let end_of_fast_sync = retry(|| Ok(rpc.getblockcount()?));
+        let mut rpc = rpc_info.to_rpc_client();
+        let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
 
         let mut s = Self {
             rx: None,
@@ -106,7 +106,7 @@ impl Prefetcher {
             self.thread_joins.push({
                 std::thread::spawn({
                     let current = current.clone();
-                    let rpc = self.rpc_info.to_rpc_client();
+                    let mut rpc = self.rpc_info.to_rpc_client();
                     let tx = tx.clone();
                     let workers_finish = self.workers_finish.clone();
                     move || {
@@ -117,7 +117,7 @@ impl Prefetcher {
                                 Ok(if workers_finish.load(Ordering::SeqCst) {
                                     None
                                 } else {
-                                    Some(get_block_by_height(&rpc, height)?)
+                                    Some(get_block_by_height(&mut rpc, height)?)
                                 })
                             });
                             if let Some(item) = item {
@@ -222,14 +222,11 @@ impl Drop for Prefetcher {
 }
 
 fn get_block_by_height(
-    rpc: &bitcoin_rpc::BitcoinRpc,
+    rpc: &mut bitcoincore_rpc::Client,
     height: BlockHeight,
 ) -> Result<PrefetcherItem> {
-    let hash = rpc.get_blockhash(height)?;
-    let hex = rpc.get_block(&hash)?;
-
-    let bytes = hex::decode(hex)?;
-    let block: BitcoinCoreBlock = bitcoin_core::deserialize(&bytes)?;
+    let hash = rpc.get_block_hash(height)?;
+    let block = rpc.get_by_id(&hash)?;
     Ok(BlockInfo {
         height,
         hash,

@@ -11,19 +11,19 @@ use common_failures::{prelude::*, quick_main};
 
 struct Indexer {
     starting_node_height: u64,
-    rpc: bitcoin_rpc::BitcoinRpc,
+    rpc: bitcoincore_rpc::Client,
     rpc_info: RpcInfo,
     db: Box<dyn db::DataStore>,
 }
 
 impl Indexer {
     fn new(rpc_info: RpcInfo, db: impl db::DataStore + 'static) -> Result<Self> {
-        let rpc = bitcoin_rpc::BitcoinRpc::new(
+        let mut rpc = bitcoincore_rpc::Client::new(
             rpc_info.url.clone(),
             rpc_info.user.clone(),
             rpc_info.password.clone(),
         );
-        let starting_node_height = rpc.getblockcount()?;
+        let starting_node_height = rpc.get_block_count()?;
 
         Ok(Self {
             rpc,
