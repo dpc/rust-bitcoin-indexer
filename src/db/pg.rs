@@ -1,4 +1,6 @@
-struct Postresql
+use super::*;
+
+struct Postresql;
 
 impl DataStore for Postresql {
     fn get_max_height(&self) -> Result<Option<BlockHeight>> {
@@ -10,7 +12,7 @@ impl DataStore for Postresql {
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
         unimplemented!();
     }
-    fn insert(&mut self, height: u64, hash: BlockHash, block: BitcoinCoreBlock) -> Result<()> {
+    fn insert(&mut self, info: &BlockInfo) -> Result<()> {
         unimplemented!();
     }
 }
