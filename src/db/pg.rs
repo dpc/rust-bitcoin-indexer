@@ -60,6 +60,7 @@ impl DataStore for Postresql {
         )?;
         Ok(())
     }
+
     fn insert(&mut self, info: &BlockInfo) -> Result<()> {
         let (block, txs, outputs, inputs) = super::parse_node_block(info)?;
 

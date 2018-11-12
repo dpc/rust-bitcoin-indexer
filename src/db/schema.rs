@@ -2,8 +2,8 @@ table! {
     blocks (hash) {
         id -> Int8,
         height -> Int8,
-        hash -> Text,
-        prev_hash -> Text,
+        hash -> Bpchar,
+        prev_hash -> Bpchar,
     }
 }
 
@@ -11,7 +11,7 @@ table! {
     inputs (utxo_tx_hash, utxo_tx_idx) {
         id -> Int8,
         height -> Int8,
-        utxo_tx_hash -> Text,
+        utxo_tx_hash -> Bpchar,
         utxo_tx_idx -> Int4,
     }
 }
@@ -20,7 +20,7 @@ table! {
     outputs (tx_hash, tx_idx) {
         id -> Int8,
         height -> Int8,
-        tx_hash -> Text,
+        tx_hash -> Bpchar,
         tx_idx -> Int4,
         value -> Int8,
         address -> Nullable<Text>,
@@ -32,7 +32,7 @@ table! {
     txs (hash) {
         id -> Int8,
         height -> Int8,
-        hash -> Text,
+        hash -> Bpchar,
         coinbase -> Bool,
     }
 }
