@@ -64,7 +64,8 @@ impl DataStore for Postresql {
     fn insert(&mut self, info: &BlockInfo) -> Result<()> {
         let (block, txs, outputs, inputs) = super::parse_node_block(info)?;
 
-        self.connection.execute(
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
             "INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)",
             &[
                 &(block.height as i64),
@@ -74,14 +75,14 @@ impl DataStore for Postresql {
         )?;
 
         for tx in &txs {
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)",
                 &[&(tx.height as i64), &tx.hash.to_string(), &tx.coinbase],
             )?;
         }
 
         for input in &inputs {
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
                 &[
                     &(input.height as i64),
@@ -92,7 +93,7 @@ impl DataStore for Postresql {
         }
 
         for output in &outputs {
-            self.connection.execute(
+            transaction.execute(
                 "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
                 &[
                     &(output.height as i64),
@@ -104,6 +105,8 @@ impl DataStore for Postresql {
                 ],
             )?;
         }
+
+        transaction.commit()?;
 
         Ok(())
     }
