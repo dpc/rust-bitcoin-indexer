@@ -43,8 +43,7 @@ impl DataStore for Postresql {
             )?
             .iter()
             .next()
-            .map(|row| BlockHash::from_str(&row.get::<_, String>(0)))
-            .inside_out()?)
+            .map(|row| BlockHash::from(row.get::<_, Vec<u8>>(0).as_slice())))
     }
 
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
@@ -69,15 +68,19 @@ impl DataStore for Postresql {
             "INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)",
             &[
                 &(block.height as i64),
-                &block.hash.to_string(),
-                &block.prev_hash.to_string(),
+                &block.hash.as_bytes().as_ref(),
+                &block.prev_hash.as_bytes().as_ref(),
             ],
         )?;
 
         for tx in &txs {
             transaction.execute(
                 "INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)",
-                &[&(tx.height as i64), &tx.hash.to_string(), &tx.coinbase],
+                &[
+                    &(tx.height as i64),
+                    &tx.hash.as_bytes().as_ref(),
+                    &tx.coinbase,
+                ],
             )?;
         }
 
@@ -86,7 +89,7 @@ impl DataStore for Postresql {
                 "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
                 &[
                     &(input.height as i64),
-                    &input.utxo_tx_hash.to_string(),
+                    &input.utxo_tx_hash.as_bytes().as_ref(),
                     &(input.utxo_tx_idx as i32),
                 ],
             )?;
@@ -97,7 +100,7 @@ impl DataStore for Postresql {
                 "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
                 &[
                     &(output.height as i64),
-                    &output.tx_hash.to_string(),
+                    &output.tx_hash.as_bytes().as_ref(),
                     &(output.tx_idx as i32),
                     &(output.value as i64),
                     &output.address,
