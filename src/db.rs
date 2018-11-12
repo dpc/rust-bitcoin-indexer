@@ -33,6 +33,7 @@ impl Block {
 struct Tx {
     pub height: BlockHeight,
     pub hash: TxHash,
+    pub coinbase: bool,
 }
 
 impl Tx {
@@ -40,6 +41,7 @@ impl Tx {
         Self {
             height: info.height,
             hash: tx.txid(),
+            coinbase: tx.is_coin_base(),
         }
     }
 }
@@ -50,6 +52,7 @@ struct Output {
     pub tx_idx: u32,
     pub value: u64,
     pub address: Option<String>,
+    pub coinbase: bool,
 }
 
 impl Output {
@@ -66,6 +69,7 @@ impl Output {
             tx_idx: idx,
             value: tx_out.value,
             address: address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
+            coinbase: tx.is_coin_base(),
         }
     }
 }
@@ -104,8 +108,10 @@ fn parse_node_block(info: &BlockInfo) -> Result<(Block, Vec<Tx>, Vec<Output>, Ve
         for (idx, tx_out) in tx.output.iter().enumerate() {
             outputs.push(Output::from_core_block(info, &tx, idx as u32, tx_out))
         }
-        for (idx, tx_in) in tx.input.iter().enumerate() {
-            inputs.push(Input::from_core_block(info, &tx, idx as u32, tx_in));
+        if !tx.is_coin_base() {
+            for (idx, tx_in) in tx.input.iter().enumerate() {
+                inputs.push(Input::from_core_block(info, &tx, idx as u32, tx_in));
+            }
         }
     }
 

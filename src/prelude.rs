@@ -1,5 +1,6 @@
 use bitcoin::util::{address, hash::Sha256dHash};
 pub use default::default;
+pub use insideout::InsideOut;
 
 pub mod bitcoin_core {
     pub use bitcoin::{

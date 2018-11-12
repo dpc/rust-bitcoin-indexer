@@ -34,7 +34,7 @@ impl Indexer {
     }
 
     fn process_block(&mut self, binfo: &BlockInfo) -> Result<()> {
-        if binfo.height < self.starting_node_height || binfo.height % 1000 == 0 {
+        if binfo.height >= self.starting_node_height || binfo.height % 1000 == 0 {
             println!("Block {}H: {}", binfo.height, binfo.hash);
         }
 
@@ -42,9 +42,11 @@ impl Indexer {
             if db_hash != binfo.hash {
                 println!("Block {}H: {} - reorg", binfo.height, binfo.hash);
                 self.db.reorg_at_height(binfo.height);
+                self.db.insert(binfo)?;
             }
+        } else {
+            self.db.insert(binfo)?;
         }
-        self.db.insert(binfo)?;
 
         Ok(())
     }
@@ -72,7 +74,8 @@ fn run() -> Result<()> {
         user: opts.node_rpc_user,
         password: opts.node_rpc_pass,
     };
-    let mut db = db::mem::MemDataStore::default();
+    //let mut db = db::mem::MemDataStore::default();
+    let mut db = db::pg::Postresql::new()?;
     let mut indexer = Indexer::new(rpc_info, db)?;
     indexer.run()
 }

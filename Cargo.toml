@@ -18,13 +18,11 @@ secp256k1 = "*"
 crossbeam-channel = "*"
 structopt = "*"
 default = "*"
-diesel = { version = "1", features = ["postgres", "chrono"] }
-#diesel_infer_schema = { version = "1", features = ["postgres"] }
-#diesel_codegen = { version = "*", features = ["postgres"] }
 dotenv = "*"
+postgres = "*"
+insideout = "*"
 
-r2d2 = "*"
-r2d2-diesel = "*"
+# r2d2 = "*"
 
 [dev-dependencies]
 criterion = "0.2"

@@ -1,5 +1,5 @@
 table! {
-    blocks (id) {
+    blocks (hash) {
         id -> Int8,
         height -> Int8,
         hash -> Text,
@@ -8,30 +8,32 @@ table! {
 }
 
 table! {
-    inputs (id) {
+    inputs (utxo_tx_hash, utxo_tx_idx) {
         id -> Int8,
         height -> Int8,
-        utxo_tx_hash -> Int8,
-        utxo_tx_idx -> Int2,
+        utxo_tx_hash -> Text,
+        utxo_tx_idx -> Int4,
     }
 }
 
 table! {
-    outputs (id) {
+    outputs (tx_hash, tx_idx) {
         id -> Int8,
         height -> Int8,
         tx_hash -> Text,
-        tx_idx -> Int2,
+        tx_idx -> Int4,
         value -> Int8,
         address -> Nullable<Text>,
+        coinbase -> Bool,
     }
 }
 
 table! {
-    txs (id) {
+    txs (hash) {
         id -> Int8,
         height -> Int8,
         hash -> Text,
+        coinbase -> Bool,
     }
 }
 
