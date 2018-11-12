@@ -111,7 +111,7 @@ impl Prefetcher {
                     let workers_finish = self.workers_finish.clone();
                     move || {
                         while !workers_finish.load(Ordering::SeqCst) {
-                            let height = current.fetch_add(1, Ordering::Relaxed) as u64;
+                            let height = current.fetch_add(1, Ordering::SeqCst) as u64;
 
                             let item = retry(|| {
                                 Ok(if workers_finish.load(Ordering::SeqCst) {
@@ -136,8 +136,8 @@ impl Prefetcher {
     /// to a different `prev_blockhash` than we recorded. That
     /// means that the previous hash we've recorded was abandoned.
     fn detected_reorg(&mut self, item: &PrefetcherItem) -> bool {
-        if self.cur_height == 0 {
-            if let Some(prev_hash) = self.prev_hashes.get(&(self.cur_height - 1)) {
+        if self.cur_height > 0 {
+            if let Some(prev_hash) = self.prev_hashes.get(&(self.cur_height)) {
                 if prev_hash != &item.hash {
                     return true;
                 }
@@ -161,6 +161,7 @@ impl Prefetcher {
     /// This doesn't have to be blazing fast, so it isn't.
     fn reset_on_reorg(&mut self) {
         self.stop_workers();
+        assert!(self.cur_height > 0);
         self.cur_height -= 1;
         self.start_workers();
     }
