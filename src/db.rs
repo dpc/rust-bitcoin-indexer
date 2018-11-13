@@ -10,7 +10,7 @@ pub trait DataStore {
     fn get_max_height(&self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
-    fn insert(&mut self, info: &BlockInfo) -> Result<()>;
+    fn insert(&mut self, info: BlockInfo) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,14 @@ impl Input {
     }
 }
 
-fn parse_node_block(info: &BlockInfo) -> Result<(Block, Vec<Tx>, Vec<Output>, Vec<Input>)> {
+struct Parsed {
+    pub block: Block,
+    pub txs: Vec<Tx>,
+    pub outputs: Vec<Output>,
+    pub inputs: Vec<Input>,
+}
+
+fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
     let mut outputs: Vec<Output> = vec![];
     let mut inputs: Vec<Input> = vec![];
     let mut txs: Vec<Tx> = vec![];
@@ -115,5 +122,11 @@ fn parse_node_block(info: &BlockInfo) -> Result<(Block, Vec<Tx>, Vec<Output>, Ve
         }
     }
 
-    Ok((block, txs, outputs, inputs))
+    let parsed = Parsed {
+        block,
+        txs,
+        outputs,
+        inputs,
+    };
+    Ok(parsed)
 }

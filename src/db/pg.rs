@@ -1,7 +1,7 @@
 use super::*;
 
 use dotenv::dotenv;
-use postgres::{Connection, TlsMode};
+use postgres::{transaction::Transaction, Connection, TlsMode};
 use std::{env, str::FromStr};
 
 pub fn establish_connection() -> Result<Connection> {
@@ -11,15 +11,107 @@ pub fn establish_connection() -> Result<Connection> {
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
+fn insert_parsed(transaction: &Transaction, parsed: Parsed) -> Result<()> {
+    let Parsed {
+        block,
+        txs,
+        outputs,
+        inputs,
+    } = parsed;
+    transaction.execute(
+        "INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)",
+        &[
+            &(block.height as i64),
+            &block.hash.as_bytes().as_ref(),
+            &block.prev_hash.as_bytes().as_ref(),
+        ],
+    )?;
+
+    for tx in &txs {
+        transaction.execute(
+            "INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)",
+            &[
+                &(tx.height as i64),
+                &tx.hash.as_bytes().as_ref(),
+                &tx.coinbase,
+            ],
+        )?;
+    }
+
+    for input in &inputs {
+        transaction.execute(
+            "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
+            &[
+                &(input.height as i64),
+                &input.utxo_tx_hash.as_bytes().as_ref(),
+                &(input.utxo_tx_idx as i32),
+            ],
+        )?;
+    }
+
+    for output in &outputs {
+        transaction.execute(
+                "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &(output.height as i64),
+                    &output.tx_hash.as_bytes().as_ref(),
+                    &(output.tx_idx as i32),
+                    &(output.value as i64),
+                    &output.address,
+                    &output.coinbase,
+                ],
+            )?;
+    }
+    Ok(())
+}
 pub struct Postresql {
     // TODO: pool
     connection: Connection,
+    tx: Option<crossbeam_channel::Sender<BlockInfo>>,
+    thread_joins: Vec<std::thread::JoinHandle<()>>,
+    thread_num: usize,
 }
 
 impl Postresql {
     pub fn new() -> Result<Self> {
         let connection = establish_connection()?;
-        Ok(Postresql { connection })
+        let mut s = Postresql {
+            connection,
+            thread_num: 8,
+            tx: default(),
+            thread_joins: vec![],
+        };
+        s.start_workers();
+        Ok(s)
+    }
+
+    fn stop_workers(&mut self) {
+        drop(self.tx.take());
+
+        self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
+    }
+
+    fn start_workers(&mut self) {
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num);
+        self.tx = Some(tx);
+        assert!(self.thread_joins.is_empty());
+        for _ in 0..self.thread_num {
+            self.thread_joins.push({
+                std::thread::spawn({
+                    let rx = rx.clone();
+                    move || {
+                        let connection = establish_connection().unwrap();
+
+                        while let Ok(binfo) = rx.recv() {
+                            let parsed = super::parse_node_block(&binfo).unwrap();
+                            let transaction = connection.transaction().unwrap();
+                            insert_parsed(&transaction, parsed);
+                            transaction.commit().unwrap();
+                        }
+                    }
+                })
+            });
+        }
     }
 }
 
@@ -60,57 +152,8 @@ impl DataStore for Postresql {
         Ok(())
     }
 
-    fn insert(&mut self, info: &BlockInfo) -> Result<()> {
-        let (block, txs, outputs, inputs) = super::parse_node_block(info)?;
-
-        let transaction = self.connection.transaction()?;
-        transaction.execute(
-            "INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)",
-            &[
-                &(block.height as i64),
-                &block.hash.as_bytes().as_ref(),
-                &block.prev_hash.as_bytes().as_ref(),
-            ],
-        )?;
-
-        for tx in &txs {
-            transaction.execute(
-                "INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)",
-                &[
-                    &(tx.height as i64),
-                    &tx.hash.as_bytes().as_ref(),
-                    &tx.coinbase,
-                ],
-            )?;
-        }
-
-        for input in &inputs {
-            transaction.execute(
-                "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
-                &[
-                    &(input.height as i64),
-                    &input.utxo_tx_hash.as_bytes().as_ref(),
-                    &(input.utxo_tx_idx as i32),
-                ],
-            )?;
-        }
-
-        for output in &outputs {
-            transaction.execute(
-                "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    &(output.height as i64),
-                    &output.tx_hash.as_bytes().as_ref(),
-                    &(output.tx_idx as i32),
-                    &(output.value as i64),
-                    &output.address,
-                    &output.coinbase,
-                ],
-            )?;
-        }
-
-        transaction.commit()?;
-
+    fn insert(&mut self, info: BlockInfo) -> Result<()> {
+        self.tx.as_ref().unwrap().send(info);
         Ok(())
     }
 }

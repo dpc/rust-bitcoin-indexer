@@ -33,7 +33,7 @@ impl Indexer {
         })
     }
 
-    fn process_block(&mut self, binfo: &BlockInfo) -> Result<()> {
+    fn process_block(&mut self, binfo: BlockInfo) -> Result<()> {
         if binfo.height >= self.starting_node_height || binfo.height % 1000 == 0 {
             println!("Block {}H: {}", binfo.height, binfo.hash);
         }
@@ -60,7 +60,7 @@ impl Indexer {
 
         let prefetcher = prefetcher::Prefetcher::new(&self.rpc_info, start_from_block)?;
         for item in prefetcher {
-            self.process_block(&item)?;
+            self.process_block(item)?;
         }
 
         Ok(())
