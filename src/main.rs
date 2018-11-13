@@ -34,18 +34,24 @@ impl Indexer {
     }
 
     fn process_block(&mut self, binfo: BlockInfo) -> Result<()> {
-        if binfo.height >= self.starting_node_height || binfo.height % 1000 == 0 {
+        let block_height = binfo.height;
+        if block_height >= self.starting_node_height || block_height % 1000 == 0 {
             println!("Block {}H: {}", binfo.height, binfo.hash);
         }
 
-        if let Some(db_hash) = self.db.get_hash_by_height(binfo.height)? {
+        if let Some(db_hash) = self.db.get_hash_by_height(block_height)? {
             if db_hash != binfo.hash {
-                println!("Block {}H: {} - reorg", binfo.height, binfo.hash);
-                self.db.reorg_at_height(binfo.height);
+                println!("Block {}H: {} - reorg", block_height, binfo.hash);
+                self.db.reorg_at_height(block_height);
                 self.db.insert(binfo)?;
             }
         } else {
             self.db.insert(binfo)?;
+            if block_height > self.starting_node_height {
+                // After we've reached the node chain-head, we want everything
+                // to appear immediately, even if it's slower
+                self.db.flush()?;
+            }
         }
 
         Ok(())

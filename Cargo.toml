@@ -21,6 +21,7 @@ default = "*"
 dotenv = "*"
 postgres = "*"
 insideout = "*"
+num_cpus = "*"
 
 # r2d2 = "*"
 

@@ -70,7 +70,7 @@ pub struct Postresql {
     tx: Option<crossbeam_channel::Sender<Vec<BlockInfo>>>,
     thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
     thread_num: usize,
-    max_height: Option<u64>,
+    cached_max_height: Option<u64>,
     batch: Vec<BlockInfo>,
     batch_txs_total: u64,
 }
@@ -86,10 +86,10 @@ impl Postresql {
         let connection = establish_connection()?;
         let mut s = Postresql {
             connection,
-            thread_num: 64,
+            thread_num: num_cpus::get() * 2,
             tx: default(),
             thread_joins: vec![],
-            max_height: None,
+            cached_max_height: None,
             batch: vec![],
             batch_txs_total: 0,
         };
@@ -107,7 +107,7 @@ impl Postresql {
     }
 
     fn start_workers(&mut self) {
-        let (tx, rx) = crossbeam_channel::bounded(1024);
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 2);
         self.tx = Some(tx);
         assert!(self.thread_joins.is_empty());
         for _ in 0..self.thread_num {
@@ -141,13 +141,10 @@ impl Postresql {
     }
 
     fn update_max_height(&mut self, info: &BlockInfo) {
-        if let Some(max_height) = self.max_height {
-            if max_height < info.height {
-                self.max_height = Some(info.height);
-            }
-        } else {
-            self.max_height = Some(info.height);
-        }
+        self.cached_max_height = Some(
+            self.cached_max_height
+                .map_or(info.height, |h| std::cmp::max(h, info.height)),
+        );
     }
 
     fn flush_batch(&mut self) {
@@ -161,7 +158,7 @@ impl Postresql {
 
 impl DataStore for Postresql {
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
-        self.max_height = self
+        self.cached_max_height = self
             .connection
             .query("SELECT MAX(height) FROM blocks", &[])?
             .iter()
@@ -169,15 +166,21 @@ impl DataStore for Postresql {
             .and_then(|row| row.get::<_, Option<i64>>(0))
             .map(|u| u as u64);
 
-        Ok(self.max_height)
+        Ok(self.cached_max_height)
     }
 
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
-        if let Some(max_height) = self.max_height {
+        if let Some(max_height) = self.cached_max_height {
             if max_height < height {
                 return Ok(None);
             }
         }
+
+        // TODO: This could be done better, if we were just tracking
+        // things in flight
+        eprintln!("TODO: Unnecessary flush");
+        self.flush_batch();
+        self.flush_workers();
 
         Ok(self
             .connection
@@ -203,6 +206,8 @@ impl DataStore for Postresql {
             "REMOVE FROM inputs WHERE outputs >= $1",
             &[&(height as i64)],
         )?;
+
+        self.cached_max_height = None;
         Ok(())
     }
 
@@ -214,6 +219,11 @@ impl DataStore for Postresql {
         if self.batch_txs_total > 10000 {
             self.flush_batch();
         }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.flush_batch();
         Ok(())
     }
 }

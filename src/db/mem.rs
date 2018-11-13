@@ -11,15 +11,7 @@ impl DataStore for MemDataStore {
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
         Ok(self.block_hashes.get(&height).cloned())
     }
-    /*
-        fn get_chain_head(&self) -> Result<Option<(BlockHeight, BlockHash)>> {
-            Ok(self
-                .blocks
-                .iter()
-                .next_back()
-                .map(|(k, v)| (*k, v.hash.clone())))
-        }
-    */
+
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
         for height in height.. {
             if self.blocks.remove(&height).is_none() {
@@ -39,11 +31,9 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
-    /*
-    fn get_min_height(&self) -> Result<Option<BlockHeight>> {
-        Ok(self.blocks.keys().next().cloned())
+    fn flush(&mut self) -> Result<()> {
+        Ok(())
     }
-    */
 
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
         Ok(self.blocks.keys().next_back().cloned())
