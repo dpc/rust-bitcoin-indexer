@@ -103,7 +103,7 @@ impl Postresql {
     }
 
     fn start_workers(&mut self) {
-        let (tx, rx) = crossbeam_channel::bounded(self.thread_num);
+        let (tx, rx) = crossbeam_channel::bounded(1024);
         self.tx = Some(tx);
         assert!(self.thread_joins.is_empty());
         for _ in 0..self.thread_num {
