@@ -68,8 +68,14 @@ pub struct Postresql {
     // TODO: pool
     connection: Connection,
     tx: Option<crossbeam_channel::Sender<BlockInfo>>,
-    thread_joins: Vec<std::thread::JoinHandle<()>>,
+    thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
     thread_num: usize,
+}
+
+impl Drop for Postresql {
+    fn drop(&mut self) {
+        self.stop_workers();
+    }
 }
 
 impl Postresql {
@@ -77,7 +83,7 @@ impl Postresql {
         let connection = establish_connection()?;
         let mut s = Postresql {
             connection,
-            thread_num: 8,
+            thread_num: 32,
             tx: default(),
             thread_joins: vec![],
         };
@@ -88,7 +94,10 @@ impl Postresql {
     fn stop_workers(&mut self) {
         drop(self.tx.take());
 
-        self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
+        let results: Vec<_> = self.thread_joins.drain(..).map(|j| j.join()).collect();
+        for res in results.into_iter() {
+            res.expect("Worker thread panicked");
+        }
     }
 
     fn start_workers(&mut self) {
@@ -103,11 +112,12 @@ impl Postresql {
                         let connection = establish_connection().unwrap();
 
                         while let Ok(binfo) = rx.recv() {
-                            let parsed = super::parse_node_block(&binfo).unwrap();
-                            let transaction = connection.transaction().unwrap();
+                            let parsed = super::parse_node_block(&binfo)?;
+                            let transaction = connection.transaction()?;
                             insert_parsed(&transaction, parsed);
-                            transaction.commit().unwrap();
+                            transaction.commit()?;
                         }
+                        Ok(())
                     }
                 })
             });
