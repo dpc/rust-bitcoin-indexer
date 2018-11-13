@@ -11,56 +11,59 @@ pub fn establish_connection() -> Result<Connection> {
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
-fn insert_parsed(transaction: &Transaction, parsed: Parsed) -> Result<()> {
-    let Parsed {
-        block,
-        txs,
-        outputs,
-        inputs,
-    } = parsed;
-    transaction.execute(
-        "INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)",
-        &[
+fn insert_parsed(transaction: &Transaction, parsed: &[Parsed]) -> Result<()> {
+    let insert_block = transaction
+        .prepare_cached("INSERT INTO blocks (height, hash, prev_hash) VALUES ($1, $2, $3)")?;
+    let insert_tx = transaction
+        .prepare_cached("INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)")?;
+
+    let insert_input = transaction.prepare_cached(
+        "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
+    )?;
+    let insert_output = transaction.prepare_cached(
+        "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
+        )?;
+
+    for parsed in parsed {
+        let &Parsed {
+            ref block,
+            ref txs,
+            ref outputs,
+            ref inputs,
+        } = parsed;
+
+        insert_block.execute(&[
             &(block.height as i64),
             &block.hash.as_bytes().as_ref(),
             &block.prev_hash.as_bytes().as_ref(),
-        ],
-    )?;
+        ])?;
 
-    for tx in &txs {
-        transaction.execute(
-            "INSERT INTO txs (height, hash, coinbase) VALUES ($1, $2, $3)",
-            &[
+        for tx in txs {
+            insert_tx.execute(&[
                 &(tx.height as i64),
                 &tx.hash.as_bytes().as_ref(),
                 &tx.coinbase,
-            ],
-        )?;
-    }
+            ])?;
+        }
 
-    for input in &inputs {
-        transaction.execute(
-            "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ($1, $2, $3)",
-            &[
+        for input in inputs {
+            insert_input.execute(&[
                 &(input.height as i64),
                 &input.utxo_tx_hash.as_bytes().as_ref(),
                 &(input.utxo_tx_idx as i32),
-            ],
-        )?;
-    }
+            ])?;
+        }
 
-    for output in &outputs {
-        transaction.execute(
-                "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    &(output.height as i64),
-                    &output.tx_hash.as_bytes().as_ref(),
-                    &(output.tx_idx as i32),
-                    &(output.value as i64),
-                    &output.address,
-                    &output.coinbase,
-                ],
-            )?;
+        for output in outputs {
+            insert_output.execute(&[
+                &(output.height as i64),
+                &output.tx_hash.as_bytes().as_ref(),
+                &(output.tx_idx as i32),
+                &(output.value as i64),
+                &output.address,
+                &output.coinbase,
+            ])?;
+        }
     }
     Ok(())
 }
@@ -123,9 +126,7 @@ impl Postresql {
                                 .map(|binfo| super::parse_node_block(&binfo))
                                 .collect::<Result<Vec<super::Parsed>>>()?;
                             let transaction = connection.transaction()?;
-                            for parsed in parsed.into_iter() {
-                                insert_parsed(&transaction, parsed);
-                            }
+                            insert_parsed(&transaction, &parsed);
                             transaction.commit()?;
                         }
                         Ok(())
