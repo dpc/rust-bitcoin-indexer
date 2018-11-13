@@ -70,6 +70,7 @@ pub struct Postresql {
     tx: Option<crossbeam_channel::Sender<BlockInfo>>,
     thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
     thread_num: usize,
+    max_height: Option<u64>,
 }
 
 impl Drop for Postresql {
@@ -86,6 +87,7 @@ impl Postresql {
             thread_num: 64,
             tx: default(),
             thread_joins: vec![],
+            max_height: None,
         };
         s.start_workers();
         Ok(s)
@@ -126,17 +128,25 @@ impl Postresql {
 }
 
 impl DataStore for Postresql {
-    fn get_max_height(&self) -> Result<Option<BlockHeight>> {
-        Ok(self
+    fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
+        self.max_height = self
             .connection
             .query("SELECT MAX(height) FROM blocks", &[])?
             .iter()
             .next()
             .and_then(|row| row.get::<_, Option<i64>>(0))
-            .map(|u| u as u64))
+            .map(|u| u as u64);
+
+        Ok(self.max_height)
     }
 
-    fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>> {
+    fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
+        if let Some(max_height) = self.max_height {
+            if max_height < height {
+                return Ok(None);
+            }
+        }
+
         Ok(self
             .connection
             .query(
@@ -163,6 +173,14 @@ impl DataStore for Postresql {
     }
 
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
+        if let Some(max_height) = self.max_height {
+            if max_height < info.height {
+                self.max_height = Some(info.height);
+            }
+        } else {
+            self.max_height = Some(info.height);
+        }
+
         self.tx.as_ref().unwrap().send(info);
         Ok(())
     }

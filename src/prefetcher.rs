@@ -1,21 +1,22 @@
 use common_failures::prelude::*;
 use crate::prelude::*;
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{
         self,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
     },
 };
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
-    let delay_ms = 2000;
+    let delay_ms = 1000;
     let mut count = 0;
     loop {
         match f() {
             Err(e) => {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                if count % 600 == 0 {
+                if count % 1000 == 0 {
                     eprintln!("{}; retrying ...", e.display_causes_and_backtrace());
                 }
                 count += 1;
@@ -50,7 +51,7 @@ pub struct Prefetcher {
     out_of_order_items: HashMap<BlockHeight, (BlockHash, BitcoinCoreBlock)>,
     cur_height: BlockHeight,
     prev_hashes: HashMap<BlockHeight, BlockHash>,
-    workers_finish: sync::Arc<AtomicBool>,
+    workers_finish: Arc<AtomicBool>,
     thread_num: usize,
     rpc_info: RpcInfo,
     end_of_fast_sync: u64,
@@ -59,7 +60,7 @@ pub struct Prefetcher {
 impl Prefetcher {
     pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
         let thread_num = 8 * 3;
-        let workers_finish = sync::Arc::new(AtomicBool::new(false));
+        let workers_finish = Arc::new(AtomicBool::new(false));
 
         let mut rpc = rpc_info.to_rpc_client();
         let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
@@ -98,32 +99,31 @@ impl Prefetcher {
     fn start_workers(&mut self) {
         self.workers_finish.store(false, Ordering::SeqCst);
 
-        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 2);
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 8);
         self.rx = Some(rx);
-        let current = sync::Arc::new(AtomicUsize::new(self.cur_height as usize));
+        let retry_set = Arc::new(sync::Mutex::new(default()));
+        let next_height = Arc::new(AtomicUsize::new(self.cur_height as usize));
         assert!(self.thread_joins.is_empty());
         for _ in 0..self.thread_num {
             self.thread_joins.push({
                 std::thread::spawn({
-                    let current = current.clone();
+                    let next_height = next_height.clone();
                     let mut rpc = self.rpc_info.to_rpc_client();
                     let tx = tx.clone();
                     let workers_finish = self.workers_finish.clone();
+                    let retry_set = retry_set.clone();
                     move || {
-                        while !workers_finish.load(Ordering::SeqCst) {
-                            let height = current.fetch_add(1, Ordering::SeqCst) as u64;
+                        // TODO: constructor
+                        let mut worker = Worker {
+                            retry_set,
+                            next_height,
+                            workers_finish,
+                            rpc,
+                            tx,
+                            retry_count: 0,
+                        };
 
-                            let item = retry(|| {
-                                Ok(if workers_finish.load(Ordering::SeqCst) {
-                                    None
-                                } else {
-                                    Some(get_block_by_height(&mut rpc, height)?)
-                                })
-                            });
-                            if let Some(item) = item {
-                                tx.send(item);
-                            }
-                        }
+                        worker.run()
                     }
                 })
             });
@@ -222,15 +222,68 @@ impl Drop for Prefetcher {
     }
 }
 
-fn get_block_by_height(
-    rpc: &mut bitcoincore_rpc::Client,
-    height: BlockHeight,
-) -> Result<PrefetcherItem> {
-    let hash = rpc.get_block_hash(height)?;
-    let block = rpc.get_by_id(&hash)?;
-    Ok(BlockInfo {
-        height,
-        hash,
-        block,
-    })
+struct Worker {
+    rpc: bitcoincore_rpc::Client,
+    next_height: Arc<AtomicUsize>,
+    retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
+    workers_finish: Arc<AtomicBool>,
+    tx: crossbeam_channel::Sender<PrefetcherItem>,
+    retry_count: usize,
+}
+
+impl Worker {
+    fn run(&mut self) {
+        while !self.workers_finish.load(Ordering::SeqCst) {
+            let height = self
+                .get_from_retry_set()
+                .unwrap_or_else(|| self.get_from_next_height());
+
+            match self.get_block_by_height(height) {
+                Err(e) => {
+                    self.insert_into_retry_set(height);
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        self.retry_count as u64 * 1000 + 100,
+                    ));
+                    self.retry_count += 1;
+                    if self.retry_count % 2 == 0 {
+                        eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
+                    }
+                }
+                Ok(item) => {
+                    self.retry_count = 0;
+                    self.tx.send(item);
+                }
+            }
+        }
+    }
+
+    fn get_from_retry_set(&self) -> Option<BlockHeight> {
+        let mut set = self.retry_set.lock().unwrap();
+        if let Some(height) = set.iter().next().cloned() {
+            set.remove(&height);
+            return Some(height);
+        }
+
+        None
+    }
+
+    fn insert_into_retry_set(&self, height: BlockHeight) {
+        let mut set = self.retry_set.lock().unwrap();
+        let not_present = set.insert(height);
+        assert!(not_present);
+    }
+
+    fn get_from_next_height(&self) -> BlockHeight {
+        self.next_height.fetch_add(1, Ordering::SeqCst) as u64
+    }
+
+    fn get_block_by_height(&mut self, height: BlockHeight) -> Result<PrefetcherItem> {
+        let hash = self.rpc.get_block_hash(height)?;
+        let block = self.rpc.get_by_id(&hash)?;
+        Ok(BlockInfo {
+            height,
+            hash,
+            block,
+        })
+    }
 }

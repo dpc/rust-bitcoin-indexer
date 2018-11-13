@@ -7,8 +7,8 @@ use crate::prelude::*;
 use std::collections::BTreeMap;
 
 pub trait DataStore {
-    fn get_max_height(&self) -> Result<Option<BlockHeight>>;
-    fn get_hash_by_height(&self, height: BlockHeight) -> Result<Option<BlockHash>>;
+    fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
+    fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
     fn insert(&mut self, info: BlockInfo) -> Result<()>;
 }
