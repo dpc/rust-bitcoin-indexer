@@ -67,10 +67,12 @@ fn insert_parsed(transaction: &Transaction, parsed: Parsed) -> Result<()> {
 pub struct Postresql {
     // TODO: pool
     connection: Connection,
-    tx: Option<crossbeam_channel::Sender<BlockInfo>>,
+    tx: Option<crossbeam_channel::Sender<Vec<BlockInfo>>>,
     thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
     thread_num: usize,
     max_height: Option<u64>,
+    batch: Vec<BlockInfo>,
+    batch_txs_total: u64,
 }
 
 impl Drop for Postresql {
@@ -88,6 +90,8 @@ impl Postresql {
             tx: default(),
             thread_joins: vec![],
             max_height: None,
+            batch: vec![],
+            batch_txs_total: 0,
         };
         s.start_workers();
         Ok(s)
@@ -114,9 +118,14 @@ impl Postresql {
                         let connection = establish_connection().unwrap();
 
                         while let Ok(binfo) = rx.recv() {
-                            let parsed = super::parse_node_block(&binfo)?;
+                            let parsed = binfo
+                                .into_iter()
+                                .map(|binfo| super::parse_node_block(&binfo))
+                                .collect::<Result<Vec<super::Parsed>>>()?;
                             let transaction = connection.transaction()?;
-                            insert_parsed(&transaction, parsed);
+                            for parsed in parsed.into_iter() {
+                                insert_parsed(&transaction, parsed);
+                            }
                             transaction.commit()?;
                         }
                         Ok(())
@@ -126,8 +135,12 @@ impl Postresql {
         }
     }
 
+    fn flush_workers(&mut self) {
+        self.stop_workers();
+        self.start_workers();
+    }
 
-    fn update_max_height(&mut self, info: &BlockHeight) {
+    fn update_max_height(&mut self, info: &BlockInfo) {
         if let Some(max_height) = self.max_height {
             if max_height < info.height {
                 self.max_height = Some(info.height);
@@ -135,6 +148,14 @@ impl Postresql {
         } else {
             self.max_height = Some(info.height);
         }
+    }
+
+    fn flush_batch(&mut self) {
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(std::mem::replace(&mut self.batch, vec![]));
+        self.batch_txs_total = 0;
     }
 }
 
@@ -170,6 +191,8 @@ impl DataStore for Postresql {
     }
 
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
+        self.flush_batch();
+        self.flush_workers();
         self.connection
             .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
         self.connection
@@ -184,10 +207,13 @@ impl DataStore for Postresql {
     }
 
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
+        self.update_max_height(&info);
 
-        self.update_max_height(info);
-
-        self.tx.as_ref().unwrap().send(info);
+        self.batch_txs_total += info.block.txdata.len() as u64;
+        self.batch.push(info);
+        if self.batch_txs_total > 10000 {
+            self.flush_batch();
+        }
         Ok(())
     }
 }
