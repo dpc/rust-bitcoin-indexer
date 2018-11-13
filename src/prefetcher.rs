@@ -98,7 +98,7 @@ impl Prefetcher {
     fn start_workers(&mut self) {
         self.workers_finish.store(false, Ordering::SeqCst);
 
-        let (tx, rx) = crossbeam_channel::bounded(self.thread_num);
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 2);
         self.rx = Some(rx);
         let current = sync::Arc::new(AtomicUsize::new(self.cur_height as usize));
         assert!(self.thread_joins.is_empty());

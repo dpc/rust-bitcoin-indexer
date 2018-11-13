@@ -83,7 +83,7 @@ impl Postresql {
         let connection = establish_connection()?;
         let mut s = Postresql {
             connection,
-            thread_num: 32,
+            thread_num: 64,
             tx: default(),
             thread_joins: vec![],
         };
