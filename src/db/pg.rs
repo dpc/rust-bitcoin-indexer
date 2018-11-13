@@ -70,11 +70,11 @@ fn insert_parsed(transaction: &Transaction, parsed: &[Parsed]) -> Result<()> {
 pub struct Postresql {
     // TODO: pool
     connection: Connection,
-    tx: Option<crossbeam_channel::Sender<Vec<BlockInfo>>>,
+    tx: Option<crossbeam_channel::Sender<Vec<Parsed>>>,
     thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
     thread_num: usize,
     cached_max_height: Option<u64>,
-    batch: Vec<BlockInfo>,
+    batch: Vec<super::Parsed>,
     batch_txs_total: u64,
 }
 
@@ -120,11 +120,7 @@ impl Postresql {
                     move || {
                         let connection = establish_connection().unwrap();
 
-                        while let Ok(binfo) = rx.recv() {
-                            let parsed = binfo
-                                .into_iter()
-                                .map(|binfo| super::parse_node_block(&binfo))
-                                .collect::<Result<Vec<super::Parsed>>>()?;
+                        while let Ok(parsed) = rx.recv() {
                             let transaction = connection.transaction()?;
                             insert_parsed(&transaction, &parsed);
                             transaction.commit()?;
@@ -216,7 +212,7 @@ impl DataStore for Postresql {
         self.update_max_height(&info);
 
         self.batch_txs_total += info.block.txdata.len() as u64;
-        self.batch.push(info);
+        self.batch.push(super::parse_node_block(&info)?);
         if self.batch_txs_total > 10000 {
             self.flush_batch();
         }
