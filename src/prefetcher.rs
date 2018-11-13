@@ -59,7 +59,7 @@ pub struct Prefetcher {
 
 impl Prefetcher {
     pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
-        let thread_num = 8 * 3;
+        let thread_num = 8 * 8;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
         let mut rpc = rpc_info.to_rpc_client();
