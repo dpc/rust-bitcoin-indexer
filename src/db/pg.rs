@@ -125,6 +125,17 @@ impl Postresql {
             });
         }
     }
+
+
+    fn update_max_height(&mut self, info: &BlockHeight) {
+        if let Some(max_height) = self.max_height {
+            if max_height < info.height {
+                self.max_height = Some(info.height);
+            }
+        } else {
+            self.max_height = Some(info.height);
+        }
+    }
 }
 
 impl DataStore for Postresql {
@@ -173,13 +184,8 @@ impl DataStore for Postresql {
     }
 
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
-        if let Some(max_height) = self.max_height {
-            if max_height < info.height {
-                self.max_height = Some(info.height);
-            }
-        } else {
-            self.max_height = Some(info.height);
-        }
+
+        self.update_max_height(info);
 
         self.tx.as_ref().unwrap().send(info);
         Ok(())
