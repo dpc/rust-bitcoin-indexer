@@ -183,7 +183,12 @@ impl Postresql {
         let connection = establish_connection()?;
         let mut s = Postresql {
             connection,
-            thread_num: num_cpus::get() * 2,
+            // It looks like 1 thread can already saturate
+            // PG; convenient, because otherwise there's a problem
+            // of potential holes in the DB, if indexer was shut down
+            // forcefully and one thread have written higher-height blocks
+            // while the other one did not complete yet --dpc
+            thread_num: 1,
             tx: default(),
             thread_joins: vec![],
             cached_max_height: None,
