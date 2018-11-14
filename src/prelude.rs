@@ -66,11 +66,16 @@ pub fn address_from_script(
             address::Payload::PubkeyHash(script.as_bytes()[3..23].into())
         } else if script.is_p2pk() {
             let secp = secp256k1::Secp256k1::without_caps();
-            let pubkey = secp256k1::key::PublicKey::from_slice(
+            let pubkey = match secp256k1::key::PublicKey::from_slice(
                 &secp,
                 &script.as_bytes()[1..(script.len() - 1)],
-            )
-            .unwrap();
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Couldn't parse public-key in script {}; {}", script, e);
+                    return None;
+                }
+            };
             address::Payload::Pubkey(pubkey)
         } else if script.is_v0_p2wsh() {
             address::Payload::WitnessProgram(
