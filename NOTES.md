@@ -28,3 +28,11 @@ factor. And it creates problems of synchronization.
 Calculating how much fee was paid is a PITA, because one needs to fetch all
 the inputs to answer that. But the UTXO can be cached and kept in memory,
 even in some form of size-bound LRU.
+
+Syncing backwards is actually quite natural. Each block contains
+hash to the previous one, so even the number of calls to the node drops.
+The biggest benefit is that the more recent and interesting data is indexed
+first. Drawbacks: cached UTXO set is not built, so any more detailed
+balance/transfer-like operations have to be done when indexing the input(?).
+Indexing between indexer restarts become more tricky(?) - I need to think more
+about it.
