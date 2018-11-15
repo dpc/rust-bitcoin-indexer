@@ -1,6 +1,6 @@
 # Some notes and observations
 
-Quering blocks in raw hex and parsing from that seems fast and easy. Node
+Querying blocks in raw hex and parsing from that seems fast and easy. Node
 (storage access) seems like a bottleneck. A pool of nodes could be used to
 spread the load, as long as reorg detection is solid. But in practice,
 it's going to be the indexer DB that is a bottleneck anyway.
