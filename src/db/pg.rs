@@ -291,8 +291,6 @@ impl DataStore for Postresql {
         self.flush_batch();
         self.flush_workers();
         self.connection
-            .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
-        self.connection
             .execute("REMOVE FROM txs WHERE height >= $1", &[&(height as i64)])?;
         self.connection
             .execute("REMOVE FROM inputs WHERE height >= $1", &[&(height as i64)])?;
@@ -300,6 +298,8 @@ impl DataStore for Postresql {
             "REMOVE FROM inputs WHERE outputs >= $1",
             &[&(height as i64)],
         )?;
+        self.connection
+            .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
 
         self.cached_max_height = None;
         Ok(())
