@@ -54,7 +54,7 @@ createuser bitcoin-indexer
 createdb bitcoin-indexer bitcoin-indexer
 ```
 
-Install `diesel` to manage db schema (I need to get rid of this):
+Install `diesel` with `postgresq` support to manage db schema (I need to get rid of this):
 
 ```
 cargo install diesel_cli --no-default-features --features postgres
