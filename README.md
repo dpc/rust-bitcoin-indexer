@@ -18,7 +18,7 @@ WIP, Goals:
 
 ## Running
 
-Install Rust with https://rustup.rs"
+Install Rust with https://rustup.rs
 
 Setup Bitcoind full node, with a config similiar to this:
 
