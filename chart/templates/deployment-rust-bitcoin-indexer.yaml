@@ -27,7 +27,7 @@ spec:
         command: ['diesel', 'migration', 'run']
         env:
         - name: "DATABASE_URL"
-          value: "postgres://bitcoin-indexer-S0M3ON3SPEC1EL:bitcoin-indexer-1q2w3QW@service-rust-indexer-timescaledb/bitcoin-indexer"
+          value: "postgres://bitcoin-indexer:bitcoin-indexer@service-rust-indexer-timescaledb/bitcoin-indexer"
       containers:
       - name: rust-bitcoin-indexer
         image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-bitcoin-indexer:latest"
@@ -37,4 +37,4 @@ spec:
         - containerPort: 8082
         env:
         - name: "DATABASE_URL"
-          value: "postgres://bitcoin-indexer-S0M3ON3SPEC1EL:bitcoin-indexer-1q2w3QW@service-rust-indexer-timescaledb/bitcoin-indexer"
+          value: "postgres://bitcoin-indexer:bitcoin-indexer@service-rust-indexer-timescaledb/bitcoin-indexer"

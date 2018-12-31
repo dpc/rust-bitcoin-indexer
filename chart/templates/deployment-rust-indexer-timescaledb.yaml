@@ -26,9 +26,9 @@ spec:
         - name: "PGDATA"
           value: "/var/lib/postgresql/data/pgdata"
         - name: "POSTGRES_USER"
-          value: "bitcoin-indexer-S0M3ON3SPEC1EL"
+          value: "bitcoin-indexer"
         - name: "POSTGRES_PASSWORD"
-          value: "bitcoin-indexer-1q2w3QW"
+          value: "bitcoin-indexer"
         - name: "POSTGRES_DB"
           value: "bitcoin-indexer"
         ports:
