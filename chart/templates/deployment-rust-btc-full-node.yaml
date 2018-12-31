@@ -1,0 +1,33 @@
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: deployment-rust-btc-full-node
+  labels:
+    app: rust-btc-full-node
+  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rust-btc-full-node
+  template:
+    metadata:
+      labels:
+        app: rust-btc-full-node
+    spec:
+      containers:
+      - name: rust-btc-full-node
+        image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/btc-full-node:latest"
+        command: ["bitcoind"]
+        args: ["-datadir=/opt/bitcoin_data","-daemon=0", "-server=1", "-txindex=1", "-rpcuser=S0M3ON3SPEC1EL", "-rpcpassword=1q2w3QW!!!", "-disablewallet=1", "-walletbroadcast=0", "-rpcallowip=0.0.0.0/0"]
+        ports:
+        - containerPort: 8332
+        volumeMounts:
+        - name: storage-rust-btc-full-node
+          mountPath: /opt/bitcoin_data
+      volumes:
+      - name: storage-rust-btc-full-node
+        persistentVolumeClaim:
+          claimName: pvc-rust-btc-full-node
+
+

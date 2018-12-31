@@ -1,0 +1,21 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-rust-bitcoin-indexer
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
+    certmanager.k8s.io/cluster-issuer: letsencrypt
+spec:
+  rules:
+  - host: rust-bitcoin-indexer.bitgo-dev.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: service-ingress-rust-bitcoin-indexer
+          servicePort: 8082
+  tls:
+  - hosts:
+    - rust-bitcoin-indexer.bitgo-dev.com
+    secretName: rust-bitcoin-indexer-ingress-tls

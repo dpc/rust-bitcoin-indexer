@@ -1,5 +1,6 @@
 use super::*;
 
+use chrono::prelude::*;
 use dotenv::dotenv;
 use postgres::{transaction::Transaction, Connection, TlsMode};
 use std::{env, fmt::Write, str::FromStr};
@@ -23,18 +24,20 @@ fn insert_blocks_query(blocks: &[Block]) -> Vec<String> {
         return p1;
     }
 
-    let mut q: String = "INSERT INTO blocks (height, hash, prev_hash) VALUES".into();
+    let mut q: String = "INSERT INTO blocks (height, hash, prev_hash, time) VALUES".into();
     for (i, block) in blocks.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
+        let rfc_3339_dt = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(i64::from(block.time), 0), Utc).to_rfc3339();
         q.write_fmt(format_args!(
-            "({}, '\\x{}', '\\x{}')",
-            block.height, block.hash, block.prev_hash,
+            "({}, '\\x{}', '\\x{}', '{}')",
+            block.height, block.hash, block.prev_hash, rfc_3339_dt
         ))
         .unwrap();
     }
     q.write_str(";");
+    // TODO: eprintln!("{}", "Block Insert Query: ".to_owned() + &q);
     return vec![q];
 }
 fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
@@ -49,14 +52,15 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
         return p1;
     }
 
-    let mut q: String = "INSERT INTO txs (height, hash, coinbase) VALUES".into();
+    let mut q: String = "INSERT INTO txs (height, hash, coinbase, time) VALUES".into();
     for (i, tx) in txs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
+        let rfc_3339_dt = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(i64::from(tx.time), 0), Utc).to_rfc3339();
         q.write_fmt(format_args!(
-            "({}, '\\x{}', {})",
-            tx.height, tx.hash, tx.coinbase,
+            "({}, '\\x{}', {}, '{}')",
+            tx.height, tx.hash, tx.coinbase, rfc_3339_dt
         ))
         .unwrap();
     }

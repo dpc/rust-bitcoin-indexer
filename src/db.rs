@@ -19,6 +19,7 @@ struct Block {
     pub height: BlockHeight,
     pub hash: BlockHash,
     pub prev_hash: BlockHash,
+    pub time: u32,
 }
 
 impl Block {
@@ -27,6 +28,7 @@ impl Block {
             height: info.height,
             hash: info.hash,
             prev_hash: info.block.header.prev_blockhash,
+            time: info.block.header.time,
         }
     }
 }
@@ -35,6 +37,7 @@ struct Tx {
     pub height: BlockHeight,
     pub hash: TxHash,
     pub coinbase: bool,
+    pub time: u32,
 }
 
 impl Tx {
@@ -43,6 +46,7 @@ impl Tx {
             height: info.height,
             hash: tx.txid(),
             coinbase: tx.is_coin_base(),
+            time: info.block.header.time,
         }
     }
 }

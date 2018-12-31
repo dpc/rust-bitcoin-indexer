@@ -1,0 +1,9 @@
+name: rust-bitcoin-indexer
+version: 0.0.1
+appVersion: 0.0.1
+description: BitGo Rust Based BTC Indexer
+sources:
+- https://github.com/bitgo/rust-bitcoin-indexer
+maintainers:
+- name: driscollAtBitGo
+  email: dandriscoll@bitgo.com

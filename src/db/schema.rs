@@ -1,9 +1,10 @@
 table! {
-    blocks (hash) {
+    blocks (time, hash) {
         id -> Int8,
         height -> Int8,
         hash -> Bytea,
         prev_hash -> Bytea,
+        time -> Timestamp,
     }
 }
 
@@ -29,11 +30,12 @@ table! {
 }
 
 table! {
-    txs (hash) {
+    txs (time, hash) {
         id -> Int8,
         height -> Int8,
         hash -> Bytea,
         coinbase -> Bool,
+        time -> Timestamp,
     }
 }
 

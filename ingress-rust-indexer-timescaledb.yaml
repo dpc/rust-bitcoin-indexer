@@ -1,0 +1,21 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-rust-indexer-timescaledb
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
+    certmanager.k8s.io/cluster-issuer: letsencrypt
+spec:
+  rules:
+  - host: rust-indexer-timescaledb.bitgo-dev.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: service-rust-indexer-timescaledb
+          servicePort: 5432
+  tls:
+  - hosts:
+    - rust-indexer-timescaledb.bitgo-dev.com
+    secretName: rust-indexer-timescaledb-ingress-tls

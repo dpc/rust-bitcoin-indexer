@@ -1,0 +1,43 @@
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: deployment-rust-indexer-timescaledb
+  labels:
+    app: rust-indexer-timescaledb
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rust-indexer-timescaledb
+  template:
+    metadata:
+      labels:
+        app: rust-indexer-timescaledb
+    spec:
+      containers:
+      - image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-indexer-timescaledb:latest"
+        name: rust-indexer-timescaledb
+        env:
+        - name: "EXAMPLE_DB_HOST"
+          value: "postgres://postgres:secret@service-postgres/postgres?sslmode=require"
+        - name: "EXAMPLE_DB_KIND"
+          value: "postgres"
+        - name: "PGDATA"
+          value: "/var/lib/postgresql/data/pgdata"
+        - name: "POSTGRES_USER"
+          value: "bitcoin-indexer-S0M3ON3SPEC1EL"
+        - name: "POSTGRES_PASSWORD"
+          value: "bitcoin-indexer-1q2w3QW"
+        - name: "POSTGRES_DB"
+          value: "bitcoin-indexer"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: storage-rust-indexer-timescaledb
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: storage-rust-indexer-timescaledb
+        persistentVolumeClaim:
+          claimName: pvc-rust-indexer-timescaledb
+  

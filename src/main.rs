@@ -6,8 +6,10 @@ mod prefetcher;
 mod prelude;
 
 use crate::prelude::*;
+use simple_server::Server;
 
 use common_failures::{prelude::*, quick_main};
+use std::thread;
 
 struct Indexer {
     starting_node_height: u64,
@@ -74,12 +76,19 @@ impl Indexer {
 }
 
 fn run() -> Result<()> {
+    let server = Server::new(|request, mut response| {
+        Ok(response.body("OK".as_bytes().to_vec())?)
+    });
+    thread::spawn( move || { server.listen("127.0.0.1", "8082") });
+    println!("Listening on Port 8082 for Healthchecks");
+
     let opts: opts::Opts = structopt::StructOpt::from_args();
     let rpc_info = RpcInfo {
         url: opts.node_rpc_url,
         user: opts.node_rpc_user,
         password: opts.node_rpc_pass,
     };
+    println!("Passed Args {}, {:?}, {:?}", rpc_info.url, rpc_info.user, rpc_info.password);
     //let mut db = db::mem::MemDataStore::default();
     let mut db = db::pg::Postresql::new()?;
     let mut indexer = Indexer::new(rpc_info, db)?;

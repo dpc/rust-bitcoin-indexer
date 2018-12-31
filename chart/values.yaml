@@ -1,0 +1,12 @@
+appVersion: "0.0.1"
+
+images:
+  btc-full-node:
+    repository: "319156457634.dkr.ecr.us-west-2.amazonaws.com/btc-full-node"
+    tag: "latest"
+  rust-bitcoin-indexer:
+    repository: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-bitcoin-indexer"
+    tag: "latest"
+  rust-indexer-timescaledb:
+    repository: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-indexer-timescaledb"
+    tag: "latest"

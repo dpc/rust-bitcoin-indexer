@@ -1,0 +1,40 @@
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: deployment-rust-bitcoin-indexer
+  labels:
+    app: rust-bitcoin-indexer
+  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rust-bitcoin-indexer
+  template:
+    metadata:
+      labels:
+        app: rust-bitcoin-indexer
+    spec:
+      initContainers:
+      - name: check-db-ready
+        image: "postgres:latest"
+        command: ['sh', '-c', 'until pg_isready -h service-rust-indexer-timescaledb -p 5432; do echo waiting for database; sleep 2; done;']
+      - name: check-full-node-ready
+        image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-bitcoin-indexer:latest"
+        command: ['sh', '-c', 'until curl --data-binary "{"jsonrpc":"1.0","id":"1","method":"getnetworkinfo","params":[]}" http://service-rust-btc-full-node:8332/; do echo waiting for database; sleep 2; done;']
+      - name: run-schema-installation
+        image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-bitcoin-indexer:latest"
+        command: ['diesel', 'migration', 'run']
+        env:
+        - name: "DATABASE_URL"
+          value: "postgres://bitcoin-indexer-S0M3ON3SPEC1EL:bitcoin-indexer-1q2w3QW@service-rust-indexer-timescaledb/bitcoin-indexer"
+      containers:
+      - name: rust-bitcoin-indexer
+        image: "319156457634.dkr.ecr.us-west-2.amazonaws.com/rust-bitcoin-indexer:latest"
+        command: ["./target/release/rust-bitcoin-indexer"]
+        args: ["--rpc-url", "http://service-rust-btc-full-node:8332", "--rpc-user", "S0M3ON3SPEC1EL", "--rpc-pass", "1q2w3QW!!!"]
+        ports:
+        - containerPort: 8082
+        env:
+        - name: "DATABASE_URL"
+          value: "postgres://bitcoin-indexer-S0M3ON3SPEC1EL:bitcoin-indexer-1q2w3QW@service-rust-indexer-timescaledb/bitcoin-indexer"

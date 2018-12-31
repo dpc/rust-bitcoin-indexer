@@ -1,21 +1,29 @@
 CREATE TABLE blocks (
-  id BIGSERIAL UNIQUE,
+  id BIGSERIAL,
   height BIGINT NOT NULL,
-  hash BYTEA NOT NULL PRIMARY KEY,
-  prev_hash BYTEA NOT NULL
+  hash BYTEA NOT NULL,
+  prev_hash BYTEA NOT NULL,
+  time TIMESTAMP NOT NULL,
+  PRIMARY KEY (time, hash)
 );
 
-CREATE UNIQUE INDEX ON blocks (height);
+--SELECT CREATE_HYPERTABLE('blocks', 'time', chunk_time_interval => interval '1 day');
+--CREATE UNIQUE INDEX ON blocks (time DESC, id);
+--CREATE UNIQUE INDEX ON blocks (time DESC, height);
 
 
 CREATE TABLE txs (
-  id BIGSERIAL UNIQUE,
+  id BIGSERIAL,
   height BIGINT NOT NULL,
-  hash BYTEA NOT NULL PRIMARY KEY,
-  coinbase BOOLEAN NOT NULL
+  hash BYTEA NOT NULL,
+  coinbase BOOLEAN NOT NULL,
+  time TIMESTAMP NOT NULL,
+  PRIMARY KEY (time, hash)
 );
 
-CREATE INDEX ON txs (height);
+--SELECT CREATE_HYPERTABLE('txs', 'time', chunk_time_interval => interval '1 day');
+--CREATE UNIQUE INDEX ON txs (time DESC, id);
+--CREATE INDEX ON txs (time DESC, height);
 
 
 CREATE TABLE outputs (
@@ -29,9 +37,8 @@ CREATE TABLE outputs (
   PRIMARY KEY (tx_hash, tx_idx)
 );
 
-
-CREATE INDEX ON outputs (height);
-CREATE INDEX ON outputs (address, value);
+--CREATE INDEX ON outputs (height);
+--CREATE INDEX ON outputs (address, value);
 
 
 CREATE TABLE inputs (
@@ -42,4 +49,4 @@ CREATE TABLE inputs (
   PRIMARY KEY (utxo_tx_hash, utxo_tx_idx)
 );
 
-CREATE INDEX ON inputs (height);
+--CREATE INDEX ON inputs (height);
