@@ -209,6 +209,7 @@ impl UtxoSet {
     }
 }
 
+/// TODO: Use `select currval(pg_get_serial_sequence('txs', 'id')) as id;` instead
 fn read_next_id(conn: &Connection, q: &str) -> Result<i64> {
     const PG_STARTING_ID: i64 = 1;
     Ok(conn
