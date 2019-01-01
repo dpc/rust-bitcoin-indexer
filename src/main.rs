@@ -58,13 +58,19 @@ impl Indexer {
     }
 
     fn run(&mut self) -> Result<()> {
-        let last_known_height = self.db.get_max_height()?.unwrap_or(0);
-        // TODO: For hack testing... Turn into cmdline option
-        //let last_known_height = self.db.get_max_height()?.unwrap_or(548831);
+        let start = if let Some(last_known_height) = self.db.get_max_height()? {
+            let start_from_block = last_known_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
+            Some((
+                start_from_block,
+                self.db
+                    .get_hash_by_height(start_from_block)?
+                    .expect("Block hash should be there"),
+            ))
+        } else {
+            None
+        };
 
-        let start_from_block = last_known_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
-
-        let prefetcher = prefetcher::Prefetcher::new(&self.rpc_info, start_from_block)?;
+        let prefetcher = prefetcher::Prefetcher::new(&self.rpc_info, start)?;
         for item in prefetcher {
             self.process_block(item)?;
         }

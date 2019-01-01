@@ -98,6 +98,6 @@ pub fn address_from_script(
         } else {
             return None;
         },
-        network: network,
+        network,
     })
 }

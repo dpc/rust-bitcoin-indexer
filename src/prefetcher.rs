@@ -44,11 +44,24 @@ type PrefetcherItem = BlockInfo;
 /// ```norust
 /// 1, 2, 3, 4, ..., 2, 3, 4 ...
 /// ```
+/// # Architecture notes
 ///
+/// Note that prefetcher does not have any access to the DB or
+/// persistent storage, so it does not know what have been previous
+/// indexed. It makes using it a bit more diffucult,
+/// but the benefit is that it's much more composable and isolated.
+///
+/// In a sense, the `Prefetcher` is a simplest and smallest-possible
+/// `Indexer`, that just does not actually index anything. It only
+/// fetches blocks and detects reorgs.
 pub struct Prefetcher {
     rx: Option<crossbeam_channel::Receiver<PrefetcherItem>>,
+    /// Worker threads
     thread_joins: Vec<std::thread::JoinHandle<()>>,
+    /// List of blocks that arrived out-of-order: before the block
+    /// we were actually waiting for.
     out_of_order_items: HashMap<BlockHeight, (BlockHash, BitcoinCoreBlock)>,
+
     cur_height: BlockHeight,
     prev_hashes: HashMap<BlockHeight, BlockHash>,
     workers_finish: Arc<AtomicBool>,
@@ -58,12 +71,19 @@ pub struct Prefetcher {
 }
 
 impl Prefetcher {
-    pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
+    pub fn new(rpc_info: &RpcInfo, last_block: Option<(BlockHeight, BlockHash)>) -> Result<Self> {
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
         let mut rpc = rpc_info.to_rpc_client();
         let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
+        let mut prev_hashes = HashMap::default();
+        let start = if let Some((h, hash)) = last_block {
+            prev_hashes.insert(h, hash);
+            h + 1
+        } else {
+            0
+        };
 
         let mut s = Self {
             rx: None,
@@ -73,7 +93,7 @@ impl Prefetcher {
             cur_height: start,
             out_of_order_items: default(),
             workers_finish,
-            prev_hashes: default(),
+            prev_hashes,
             end_of_fast_sync,
         };
 
@@ -143,7 +163,7 @@ impl Prefetcher {
                 }
             }
         }
-        self.prev_hashes.insert(item.height, item.hash.clone());
+        self.prev_hashes.insert(item.height, item.hash);
         // this is how big reorgs we're going to detect
         let window_size = 100;
         self.prev_hashes
@@ -192,7 +212,7 @@ impl Iterator for Prefetcher {
                 return Some(binfo);
             }
 
-            'wait_for_next_block: loop {
+            loop {
                 let item = self
                     .rx
                     .as_ref()
@@ -222,6 +242,7 @@ impl Drop for Prefetcher {
     }
 }
 
+/// One worker thread, polling for data from the node
 struct Worker {
     rpc: bitcoincore_rpc::Client,
     next_height: Arc<AtomicUsize>,
