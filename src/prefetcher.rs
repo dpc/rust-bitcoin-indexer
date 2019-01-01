@@ -1,3 +1,5 @@
+use log::info;
+
 use crate::prelude::*;
 use common_failures::prelude::*;
 use std::{
@@ -80,8 +82,10 @@ impl Prefetcher {
         let mut prev_hashes = HashMap::default();
         let start = if let Some((h, hash)) = last_block {
             prev_hashes.insert(h, hash);
+            info!("Starting block fetcher starting at {}H", h + 1);
             h + 1
         } else {
+            info!("Starting block fetcher starting at genesis block");
             0
         };
 

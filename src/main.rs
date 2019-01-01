@@ -80,6 +80,7 @@ impl Indexer {
 }
 
 fn run() -> Result<()> {
+    env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
     let rpc_info = RpcInfo {
         url: opts.node_rpc_url,

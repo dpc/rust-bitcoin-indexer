@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, error, info, trace};
 
 use super::*;
 use dotenv::dotenv;
@@ -7,6 +7,7 @@ use postgres::{transaction::Transaction, Connection, TlsMode};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{env, fmt::Write, str::FromStr};
 
 pub fn establish_connection() -> Result<Connection> {
@@ -61,7 +62,7 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, '\\x{}', {})",
+            "({},'\\x{}',{})",
             tx.height, tx.hash, tx.coinbase,
         ))
         .unwrap();
@@ -89,7 +90,7 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, {}, {}, {}, {}, {})",
+            "({},{},{},{},{},{})",
             output.height,
             tx_ids[&output.tx_hash],
             output.tx_idx,
@@ -127,7 +128,7 @@ fn insert_inputs_query(
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, {})",
+            "({},{})",
             input.height,
             outputs[&(input.utxo_tx_hash, input.utxo_tx_idx)].id,
         ))
@@ -244,21 +245,35 @@ pub struct Pipeline {
     blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
+fn fn_log_err<F>(name: &'static str, mut f: F) -> impl FnMut() -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
+    move || {
+        let res = f();
+        if let Err(ref e) = res {
+            error!("{} finished with an error: {}", name, e);
+        }
+
+        res
+    }
+}
+
 impl Pipeline {
     fn new() -> Result<Self> {
-        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
         let (txs_tx, outputs_rx) =
-            crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(8);
-        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
-        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+            crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(1);
+        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
+        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSet::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
-            move || {
+            fn_log_err("db_worker_txs", move || {
                 let mut next_id = read_next_tx_id(&conn)?;
                 while let Ok(mut parsed) = txs_rx.recv() {
-                    debug_assert_eq!(next_id, read_next_tx_id(&conn)?);
+                    assert_eq!(next_id, read_next_tx_id(&conn)?);
 
                     let mut batch: Vec<super::Tx> = vec![];
 
@@ -266,9 +281,16 @@ impl Pipeline {
                         batch.append(&mut parsed.txs);
                     }
 
+                    trace!("Inserting {} txs...", batch.len());
+                    let start = Instant::now();
                     for s in insert_txs_query(&batch) {
                         conn.batch_execute(&s)?;
                     }
+                    trace!(
+                        "Inserted {} txs in {}s",
+                        batch.len(),
+                        Instant::now().duration_since(start).as_secs()
+                    );
 
                     let batch_len = batch.len();
                     let tx_ids: HashMap<_, _> = batch
@@ -282,13 +304,13 @@ impl Pipeline {
                     txs_tx.send((parsed, tx_ids))?;
                 }
                 Ok(())
-            }
+            })
         });
 
         let outputs_thread = std::thread::spawn({
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
-            move || {
+            fn_log_err("db_worker_outputs", move || {
                 let mut next_id = read_next_output_id(&conn)?;
                 while let Ok((mut parsed, tx_ids)) = outputs_rx.recv() {
                     let mut batch: Vec<super::Output> = vec![];
@@ -297,16 +319,22 @@ impl Pipeline {
                     for parsed in &mut parsed {
                         batch.append(&mut parsed.outputs);
                     }
-
+                    trace!("Inserting {} outputs...", batch.len());
+                    let start = Instant::now();
                     for s in insert_outputs_query(&batch, &tx_ids) {
                         conn.batch_execute(&s)?;
                     }
+                    trace!(
+                        "Inserted {} ouputs in {}s",
+                        batch.len(),
+                        Instant::now().duration_since(start).as_secs()
+                    );
 
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     batch.iter().enumerate().for_each(|(i, output)| {
                         let id = next_id + (i as i64);
-                        let tx_id = tx_ids[&output.tx_hash];
-                        utxo_lock.insert(output.tx_hash, output.tx_idx, tx_id, output.value);
+                        // let tx_id = tx_ids[&output.tx_hash];
+                        utxo_lock.insert(output.tx_hash, output.tx_idx, id, output.value);
                     });
                     drop(utxo_lock);
 
@@ -315,13 +343,13 @@ impl Pipeline {
                     outputs_tx.send(parsed)?;
                 }
                 Ok(())
-            }
+            })
         });
 
         let inputs_thread = std::thread::spawn({
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
-            move || {
+            fn_log_err("db_worker_inputs", move || {
                 while let Ok((mut parsed)) = inputs_rx.recv() {
                     let mut batch: Vec<super::Input> = vec![];
 
@@ -338,19 +366,26 @@ impl Pipeline {
                         output_ids.insert(k, v);
                     }
 
+                    trace!("Inserting {} inputs...", batch.len());
+                    let start = Instant::now();
                     for s in insert_inputs_query(&batch, &output_ids) {
                         conn.batch_execute(&s)?;
                     }
+                    trace!(
+                        "Inserted {} inputs in {}s",
+                        batch.len(),
+                        Instant::now().duration_since(start).as_secs()
+                    );
 
                     inputs_tx.send(parsed)?;
                 }
                 Ok(())
-            }
+            })
         });
 
         let blocks_thread = std::thread::spawn({
             let conn = establish_connection()?;
-            move || {
+            fn_log_err("db_worker_blocks", move || {
                 while let Ok((mut parsed)) = blocks_rx.recv() {
                     let mut batch: Vec<super::Block> = vec![];
 
@@ -358,12 +393,19 @@ impl Pipeline {
                         batch.push(parsed.block);
                     }
 
+                    trace!("Inserting {} blocks...", batch.len());
+                    let start = Instant::now();
                     for s in insert_blocks_query(&batch) {
                         conn.batch_execute(&s)?;
                     }
+                    trace!(
+                        "Inserted {} blocks in {}s",
+                        batch.len(),
+                        Instant::now().duration_since(start).as_secs()
+                    );
                 }
                 Ok(())
-            }
+            })
         });
         Ok(Self {
             tx: Some(tx),
@@ -432,10 +474,12 @@ impl Postresql {
     }
 
     fn stop_workers(&mut self) {
+        debug!("Stopping DB pipeline workers");
         self.pipeline.take();
     }
 
     fn start_workers(&mut self) {
+        debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
         self.pipeline = Some(Pipeline::new().unwrap())
     }
@@ -453,6 +497,7 @@ impl Postresql {
     }
 
     fn flush_batch(&mut self) -> Result<()> {
+        trace!("Flushing batch with {}txes", self.batch_txs_total);
         let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
             .par_iter()
             .map(|block_info| super::parse_node_block(&block_info))
@@ -465,6 +510,7 @@ impl Postresql {
             .as_ref()
             .expect("tx not null")
             .send(parsed);
+        trace!("Batch flushed");
         self.batch_txs_total = 0;
         Ok(())
     }
@@ -510,6 +556,7 @@ impl DataStore for Postresql {
     }
 
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
+        info!("Reorg detected at {}H", height);
         self.flush_batch();
         self.flush_workers();
 

@@ -5,6 +5,7 @@ use crate::prelude::*;
 use bitcoincore_rpc::Client;
 use common_failures::prelude::*;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 pub trait DataStore {
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
@@ -43,10 +44,11 @@ impl Tx {
         tx_id: TxHash,
         tx: &bitcoin_core::Transaction,
     ) -> Self {
+        let coinbase = tx.is_coin_base();
         Self {
             height: info.height,
             hash: tx_id,
-            coinbase: tx.is_coin_base(),
+            coinbase,
         }
     }
 }
@@ -117,7 +119,25 @@ fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
     let block = Block::from_core_block(info);
 
     for tx in &info.block.txdata {
-        let tx_id = tx.txid();
+        let coinbase = tx.is_coin_base();
+
+        let tx_id = if block.height == 91842 && coinbase {
+            // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
+            // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
+            //
+            // are twice in the blockchain; eg.
+            // https://blockchair.com/bitcoin/block/91812
+            // https://blockchair.com/bitcoin/block/91842
+            // to make the unique indexes happy, we just add one to last byte
+
+            TxHash::from_str("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
+                .unwrap()
+        } else if info.height == 91880 && coinbase {
+            TxHash::from_str("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
+                .unwrap()
+        } else {
+            tx.txid()
+        };
         txs.push(Tx::from_core_block(info, tx_id, &tx));
         for (idx, tx_out) in tx.output.iter().enumerate() {
             outputs.push(Output::from_core_block(
