@@ -1,9 +1,9 @@
 pub mod mem;
 pub mod pg;
 
+use crate::prelude::*;
 use bitcoincore_rpc::Client;
 use common_failures::prelude::*;
-use crate::prelude::*;
 use std::collections::BTreeMap;
 
 pub trait DataStore {

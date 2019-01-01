@@ -2,6 +2,7 @@ use super::*;
 
 use dotenv::dotenv;
 use postgres::{transaction::Transaction, Connection, TlsMode};
+use std::collections::HashMap;
 use std::{env, fmt::Write, str::FromStr};
 
 pub fn establish_connection() -> Result<Connection> {
@@ -37,6 +38,7 @@ fn insert_blocks_query(blocks: &[Block]) -> Vec<String> {
     q.write_str(";");
     return vec![q];
 }
+
 fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
     if txs.is_empty() {
         return vec![];
@@ -161,13 +163,94 @@ fn insert_parsed(conn: &Connection, parsed: Vec<Parsed>) -> Result<()> {
 
     Ok(())
 }
+
+fn read_next_block_id(conn: &Connection) -> Result<i64> {
+    Ok(conn
+        .query("SELECT max(id) FROM blocks", &[])?
+        .iter()
+        .next()
+        .map(|row| row.get::<_, i64>(0) + 1)
+        .unwrap_or(0))
+}
+
+/// Worker Pipepline
+pub struct Pipeline {
+    tx: Option<crossbeam_channel::Sender<Vec<Parsed>>>,
+    txs_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    outputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    inputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
+}
+
+impl Pipeline {
+    fn new() -> Result<Self> {
+        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+        let (txs_tx, outputs_rx) =
+            crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(8);
+        let (outputs_tx, input_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+
+        let txs_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            move || {
+                let mut next_id = read_next_block_id(&conn)?;
+                while let Ok(mut parsed) = txs_rx.recv() {
+                    let mut batch: Vec<super::Tx> = vec![];
+
+                    for parsed in &mut parsed {
+                        batch.append(&mut parsed.txs);
+                    }
+
+                    for s in insert_txs_query(&batch) {
+                        conn.batch_execute(&s)?;
+                    }
+
+                    let tx_ids: HashMap<_, _> = batch
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, tx)| (tx.hash, next_id + i as i64))
+                        .collect();
+
+                    next_id += tx_ids.len() as i64;
+
+                    txs_tx.send((parsed, tx_ids))?;
+                }
+                Ok(())
+            }
+        });
+
+        Ok(Self {
+            tx: Some(tx),
+            txs_thread: Some(txs_thread),
+            outputs_thread: None,
+            inputs_thread: None,
+            blocks_thread: None,
+        })
+    }
+}
+
+impl Drop for Pipeline {
+    fn drop(&mut self) {
+        drop(self.tx.take());
+
+        let joins = vec![
+            self.txs_thread.take().unwrap(),
+            self.outputs_thread.take().unwrap(),
+            self.inputs_thread.take().unwrap(),
+            self.blocks_thread.take().unwrap(),
+        ];
+
+        for join in joins {
+            join.join().expect("Worker thread panicked");
+        }
+    }
+}
+
 pub struct Postresql {
     // TODO: pool
     connection: Connection,
-    tx: Option<crossbeam_channel::Sender<Vec<Parsed>>>,
-    thread_joins: Vec<std::thread::JoinHandle<Result<()>>>,
-    thread_num: usize,
     cached_max_height: Option<u64>,
+    pipeline: Option<Pipeline>,
     batch: Vec<super::Parsed>,
     batch_txs_total: u64,
 }
@@ -183,50 +266,32 @@ impl Postresql {
         let connection = establish_connection()?;
         let mut s = Postresql {
             connection,
-            // It looks like 1 thread can already saturate
-            // PG; convenient, because otherwise there's a problem
-            // of potential holes in the DB, if indexer was shut down
-            // forcefully and one thread have written higher-height blocks
-            // while the other one did not complete yet --dpc
-            thread_num: 1,
-            tx: default(),
-            thread_joins: vec![],
+            pipeline: None,
             cached_max_height: None,
             batch: vec![],
             batch_txs_total: 0,
         };
+        s.wipe_inconsistent_data();
         s.start_workers();
         Ok(s)
     }
 
-    fn stop_workers(&mut self) {
-        drop(self.tx.take());
+    /// Wipe all the data that might have been added, before a `block` entry
+    /// was commited to the DB, which is the last one to be added.
+    fn wipe_inconsistent_data(&self) -> Result<()> {
+        // TODO: get highest block, wipe all entries from other tables
+        // with height higher than that
+        //
+        Ok(())
+    }
 
-        let results: Vec<_> = self.thread_joins.drain(..).map(|j| j.join()).collect();
-        for res in results.into_iter() {
-            res.expect("Worker thread panicked");
-        }
+    fn stop_workers(&mut self) {
+        self.pipeline.take();
     }
 
     fn start_workers(&mut self) {
-        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 2);
-        self.tx = Some(tx);
-        assert!(self.thread_joins.is_empty());
-        for _ in 0..self.thread_num {
-            self.thread_joins.push({
-                std::thread::spawn({
-                    let rx = rx.clone();
-                    move || {
-                        let connection = establish_connection().unwrap();
-
-                        while let Ok(parsed) = rx.recv() {
-                            insert_parsed(&connection, parsed);
-                        }
-                        Ok(())
-                    }
-                })
-            });
-        }
+        // TODO: This `unwrap` is not OK. Connecting to db can fail.
+        self.pipeline = Some(Pipeline::new().unwrap())
     }
 
     fn flush_workers(&mut self) {
@@ -242,15 +307,19 @@ impl Postresql {
     }
 
     fn flush_batch(&mut self) {
-        self.tx
+        self.pipeline
             .as_ref()
-            .unwrap()
+            .expect("workers running")
+            .tx
+            .expect("tx not null")
             .send(std::mem::replace(&mut self.batch, vec![]));
         self.batch_txs_total = 0;
     }
 }
 
 impl DataStore for Postresql {
+    // TODO: semantics against things in flight are unclear
+    // Document.
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
         self.cached_max_height = self
             .connection
@@ -290,6 +359,11 @@ impl DataStore for Postresql {
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
         self.flush_batch();
         self.flush_workers();
+
+        // Always start with removing `blocks` since that invalidates
+        // all other data in case of crash
+        self.connection
+            .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
         self.connection
             .execute("REMOVE FROM txs WHERE height >= $1", &[&(height as i64)])?;
         self.connection
@@ -298,8 +372,6 @@ impl DataStore for Postresql {
             "REMOVE FROM inputs WHERE outputs >= $1",
             &[&(height as i64)],
         )?;
-        self.connection
-            .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
 
         self.cached_max_height = None;
         Ok(())
