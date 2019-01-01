@@ -4,6 +4,7 @@ use super::*;
 use dotenv::dotenv;
 use failure::format_err;
 use postgres::{transaction::Transaction, Connection, TlsMode};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::{env, fmt::Write, str::FromStr};
@@ -396,7 +397,7 @@ pub struct Postresql {
     connection: Connection,
     cached_max_height: Option<u64>,
     pipeline: Option<Pipeline>,
-    batch: Vec<super::Parsed>,
+    batch: Vec<BlockInfo>,
     batch_txs_total: u64,
 }
 
@@ -451,15 +452,21 @@ impl Postresql {
         );
     }
 
-    fn flush_batch(&mut self) {
+    fn flush_batch(&mut self) -> Result<()> {
+        let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
+            .par_iter()
+            .map(|block_info| super::parse_node_block(&block_info))
+            .collect();
+        let parsed = parsed?;
         self.pipeline
             .as_ref()
             .expect("workers running")
             .tx
             .as_ref()
             .expect("tx not null")
-            .send(std::mem::replace(&mut self.batch, vec![]));
+            .send(parsed);
         self.batch_txs_total = 0;
+        Ok(())
     }
 }
 
@@ -527,8 +534,8 @@ impl DataStore for Postresql {
         self.update_max_height(&info);
 
         self.batch_txs_total += info.block.txdata.len() as u64;
-        self.batch.push(super::parse_node_block(&info)?);
-        if self.batch_txs_total > 10000 {
+        self.batch.push(info);
+        if self.batch_txs_total > 100000 {
             self.flush_batch();
         }
         Ok(())
