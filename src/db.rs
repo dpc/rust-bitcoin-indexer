@@ -38,10 +38,14 @@ struct Tx {
 }
 
 impl Tx {
-    pub fn from_core_block(info: &BlockInfo, tx: &bitcoin_core::Transaction) -> Self {
+    pub fn from_core_block(
+        info: &BlockInfo,
+        tx_id: TxHash,
+        tx: &bitcoin_core::Transaction,
+    ) -> Self {
         Self {
             height: info.height,
-            hash: tx.txid(),
+            hash: tx_id,
             coinbase: tx.is_coin_base(),
         }
     }
@@ -59,6 +63,7 @@ struct Output {
 impl Output {
     pub fn from_core_block(
         info: &BlockInfo,
+        tx_id: TxHash,
         tx: &bitcoin_core::Transaction,
         idx: u32,
         tx_out: &bitcoin_core::TxOut,
@@ -66,7 +71,7 @@ impl Output {
         let network = bitcoin::network::constants::Network::Bitcoin;
         Self {
             height: info.height,
-            tx_hash: tx.txid(),
+            tx_hash: tx_id,
             tx_idx: idx,
             value: tx_out.value,
             address: address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
@@ -112,9 +117,12 @@ fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
     let block = Block::from_core_block(info);
 
     for tx in &info.block.txdata {
-        txs.push(Tx::from_core_block(info, &tx));
+        let tx_id = tx.txid();
+        txs.push(Tx::from_core_block(info, tx_id, &tx));
         for (idx, tx_out) in tx.output.iter().enumerate() {
-            outputs.push(Output::from_core_block(info, &tx, idx as u32, tx_out))
+            outputs.push(Output::from_core_block(
+                info, tx_id, &tx, idx as u32, tx_out,
+            ))
         }
         if !tx.is_coin_base() {
             for (idx, tx_in) in tx.input.iter().enumerate() {
