@@ -22,7 +22,7 @@ default = "*"
 dotenv = "*"
 postgres = "*"
 insideout = "*"
-num_cpus = "*"
+num_cpus = "1"
 log = "0.4"
 rayon = "1"
 

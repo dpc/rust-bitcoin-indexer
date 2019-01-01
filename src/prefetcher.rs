@@ -1,5 +1,5 @@
-use common_failures::prelude::*;
 use crate::prelude::*;
+use common_failures::prelude::*;
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{
@@ -59,7 +59,7 @@ pub struct Prefetcher {
 
 impl Prefetcher {
     pub fn new(rpc_info: &RpcInfo, start: u64) -> Result<Self> {
-        let thread_num = 8 * 8;
+        let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
         let mut rpc = rpc_info.to_rpc_client();
