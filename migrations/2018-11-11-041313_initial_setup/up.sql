@@ -36,9 +36,8 @@ CREATE INDEX ON outputs (height);
 
 
 CREATE TABLE inputs (
-  id BIGSERIAL UNIQUE,
-  height BIGINT NOT NULL,
   output_id BIGINT NOT NULL PRIMARY KEY,
+  height BIGINT NOT NULL
 );
 
 CREATE INDEX ON inputs (height);

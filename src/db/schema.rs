@@ -8,19 +8,17 @@ table! {
 }
 
 table! {
-    inputs (utxo_tx_hash, utxo_tx_idx) {
-        id -> Int8,
+    inputs (output_id) {
+        output_id -> Int8,
         height -> Int8,
-        utxo_tx_hash -> Bytea,
-        utxo_tx_idx -> Int4,
     }
 }
 
 table! {
-    outputs (tx_hash, tx_idx) {
+    outputs (tx_id, tx_idx) {
         id -> Int8,
         height -> Int8,
-        tx_hash -> Bytea,
+        tx_id -> Int8,
         tx_idx -> Int4,
         value -> Int8,
         address -> Nullable<Text>,

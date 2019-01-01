@@ -1,6 +1,8 @@
-use super::*;
+use log::debug;
 
+use super::*;
 use dotenv::dotenv;
+use failure::format_err;
 use postgres::{transaction::Transaction, Connection, TlsMode};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -86,7 +88,7 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, '\\x{}', {}, {}, {}, {})",
+            "({}, {}, {}, {}, {}, {})",
             output.height,
             tx_ids[&output.tx_hash],
             output.tx_idx,
@@ -103,26 +105,30 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
     return vec![q];
 }
 
-fn insert_inputs_query(inputs: &[Input]) -> Vec<String> {
+fn insert_inputs_query(
+    inputs: &[Input],
+    outputs: &HashMap<(TxHash, u32), UtxoSetEntry>,
+) -> Vec<String> {
     if inputs.is_empty() {
         return vec![];
     }
     if inputs.len() > 9000 {
         let mid = inputs.len() / 2;
-        let mut p1 = insert_inputs_query(&inputs[0..mid]);
-        let mut p2 = insert_inputs_query(&inputs[mid..inputs.len()]);
+        let mut p1 = insert_inputs_query(&inputs[0..mid], outputs);
+        let mut p2 = insert_inputs_query(&inputs[mid..inputs.len()], outputs);
         p1.append(&mut p2);
         return p1;
     }
 
-    let mut q: String = "INSERT INTO inputs (height, utxo_tx_hash, utxo_tx_idx) VALUES ".into();
+    let mut q: String = "INSERT INTO inputs (height, output_id) VALUES ".into();
     for (i, input) in inputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, '\\x{}', {})",
-            input.height, input.utxo_tx_hash, input.utxo_tx_idx,
+            "({}, {})",
+            input.height,
+            outputs[&(input.utxo_tx_hash, input.utxo_tx_idx)].id,
         ))
         .unwrap();
     }
@@ -136,6 +142,8 @@ struct UtxoSetEntry {
 }
 
 #[derive(Default)]
+/// Cache of utxo set
+/// TODO: Rename to `UtxoSetCache`
 struct UtxoSet {
     entries: HashMap<(TxHash, u32), UtxoSetEntry>,
 }
@@ -145,33 +153,84 @@ impl UtxoSet {
         self.entries
             .insert((tx_hash, tx_idx), UtxoSetEntry { id, value });
     }
+
+    /// Consume `outputs`
+    ///
+    /// Returns:
+    /// * Mappings for Outputs that were found
+    /// * Vector of outputs that were missing from the set
+    fn consume(
+        &mut self,
+        outputs: impl Iterator<Item = (TxHash, u32)>,
+    ) -> (HashMap<(TxHash, u32), UtxoSetEntry>, Vec<(TxHash, u32)>) {
+        let mut found = HashMap::default();
+        let mut missing = vec![];
+
+        for output in outputs {
+            match self.entries.remove(&output) {
+                Some(details) => {
+                    found.insert(output, details);
+                }
+                None => missing.push(output),
+            }
+        }
+
+        (found, missing)
+    }
+
+    fn fetch_missing(
+        conn: &Connection,
+        missing: Vec<(TxHash, u32)>,
+    ) -> Result<HashMap<(TxHash, u32), UtxoSetEntry>> {
+        debug!("Fetching {} missing outputs", missing.len());
+        let mut out = HashMap::default();
+
+        for missing in missing {
+            let tx_bytes = (missing.0.as_bytes());
+            let tx_bytes = &tx_bytes[..];
+            let args = &[&tx_bytes, &missing.1 as &dyn postgres::types::ToSql];
+            let rows = conn.query("SELECT id, value FROM outputs INNER JOIN txs (txs.id = outputs.tx_id) WHERE txs.hash = $1 AND tx_idx = $2",
+                      args)?;
+            let row = rows
+                .iter()
+                .next()
+                .ok_or_else(|| format_err!("output {}:{} not found", missing.0, missing.1))?;
+
+            out.insert(
+                (missing.0, missing.1),
+                UtxoSetEntry {
+                    id: row.get(0),
+                    value: row.get::<_, i64>(1) as u64,
+                },
+            );
+        }
+
+        Ok(out)
+    }
+}
+
+fn read_next_id(conn: &Connection, q: &str) -> Result<i64> {
+    const PG_STARTING_ID: i64 = 1;
+    Ok(conn
+        .query(q, &[])?
+        .iter()
+        .next()
+        .expect("at least one row")
+        .get::<_, Option<i64>>(0)
+        .map(|v| v + 1)
+        .unwrap_or(PG_STARTING_ID))
 }
 
 fn read_next_tx_id(conn: &Connection) -> Result<i64> {
-    Ok(conn
-        .query("SELECT max(id) FROM txs", &[])?
-        .iter()
-        .next()
-        .map(|row| row.get::<_, i64>(0) + 1)
-        .unwrap_or(0))
-}
-
-fn read_next_block_id(conn: &Connection) -> Result<i64> {
-    Ok(conn
-        .query("SELECT max(id) FROM blocks", &[])?
-        .iter()
-        .next()
-        .map(|row| row.get::<_, i64>(0) + 1)
-        .unwrap_or(0))
+    read_next_id(conn, "SELECT MAX(id) FROM txs")
 }
 
 fn read_next_output_id(conn: &Connection) -> Result<i64> {
-    Ok(conn
-        .query("SELECT max(id) FROM outputs", &[])?
-        .iter()
-        .next()
-        .map(|row| row.get::<_, i64>(0) + 1)
-        .unwrap_or(0))
+    read_next_id(conn, "SELECT MAX(id) FROM outputs")
+}
+
+fn read_next_block_id(conn: &Connection) -> Result<i64> {
+    read_next_id(conn, "SELECT MAX(id) FROM blocks")
 }
 
 /// Worker Pipepline
@@ -188,9 +247,9 @@ impl Pipeline {
         let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
         let (txs_tx, outputs_rx) =
             crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(8);
-        let (outputs_tx, input_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
         let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
-        let utxo_set = Arc::new(Mutex::new(UtxoSet::default()));
+        let utxo_set_cache = Arc::new(Mutex::new(UtxoSet::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
@@ -209,13 +268,14 @@ impl Pipeline {
                         conn.batch_execute(&s)?;
                     }
 
+                    let batch_len = batch.len();
                     let tx_ids: HashMap<_, _> = batch
                         .into_iter()
                         .enumerate()
                         .map(|(i, tx)| (tx.hash, next_id + i as i64))
                         .collect();
 
-                    next_id += tx_ids.len() as i64;
+                    next_id += batch_len as i64;
 
                     txs_tx.send((parsed, tx_ids))?;
                 }
@@ -225,6 +285,7 @@ impl Pipeline {
 
         let outputs_thread = std::thread::spawn({
             let conn = establish_connection()?;
+            let utxo_set_cache = utxo_set_cache.clone();
             move || {
                 let mut next_id = read_next_output_id(&conn)?;
                 while let Ok((mut parsed, tx_ids)) = outputs_rx.recv() {
@@ -239,7 +300,7 @@ impl Pipeline {
                         conn.batch_execute(&s)?;
                     }
 
-                    let mut utxo_lock = utxo_set.lock().unwrap();
+                    let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     batch.iter().enumerate().for_each(|(i, output)| {
                         let id = next_id + (i as i64);
                         let tx_id = tx_ids[&output.tx_hash];
@@ -247,7 +308,7 @@ impl Pipeline {
                     });
                     drop(utxo_lock);
 
-                    next_id += tx_ids.len() as i64;
+                    next_id += batch.len() as i64;
 
                     outputs_tx.send(parsed)?;
                 }
@@ -255,12 +316,59 @@ impl Pipeline {
             }
         });
 
+        let inputs_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            let utxo_set_cache = utxo_set_cache.clone();
+            move || {
+                while let Ok((mut parsed)) = inputs_rx.recv() {
+                    let mut batch: Vec<super::Input> = vec![];
+
+                    for parsed in &mut parsed {
+                        batch.append(&mut parsed.inputs);
+                    }
+
+                    let mut utxo_lock = utxo_set_cache.lock().unwrap();
+                    let (mut output_ids, missing) =
+                        utxo_lock.consume(batch.iter().map(|i| (i.utxo_tx_hash, i.utxo_tx_idx)));
+                    drop(utxo_lock);
+                    let missing = UtxoSet::fetch_missing(&conn, missing)?;
+                    for (k, v) in missing.into_iter() {
+                        output_ids.insert(k, v);
+                    }
+
+                    for s in insert_inputs_query(&batch, &output_ids) {
+                        conn.batch_execute(&s)?;
+                    }
+
+                    inputs_tx.send(parsed)?;
+                }
+                Ok(())
+            }
+        });
+
+        let blocks_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            move || {
+                while let Ok((mut parsed)) = blocks_rx.recv() {
+                    let mut batch: Vec<super::Block> = vec![];
+
+                    for parsed in parsed.into_iter() {
+                        batch.push(parsed.block);
+                    }
+
+                    for s in insert_blocks_query(&batch) {
+                        conn.batch_execute(&s)?;
+                    }
+                }
+                Ok(())
+            }
+        });
         Ok(Self {
             tx: Some(tx),
             txs_thread: Some(txs_thread),
             outputs_thread: Some(outputs_thread),
-            inputs_thread: None,
-            blocks_thread: None,
+            inputs_thread: Some(inputs_thread),
+            blocks_thread: Some(blocks_thread),
         })
     }
 }
@@ -347,6 +455,7 @@ impl Postresql {
             .as_ref()
             .expect("workers running")
             .tx
+            .as_ref()
             .expect("tx not null")
             .send(std::mem::replace(&mut self.batch, vec![]));
         self.batch_txs_total = 0;
