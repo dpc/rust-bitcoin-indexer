@@ -3,6 +3,7 @@ use super::*;
 use dotenv::dotenv;
 use postgres::{transaction::Transaction, Connection, TlsMode};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::{env, fmt::Write, str::FromStr};
 
 pub fn establish_connection() -> Result<Connection> {
@@ -66,20 +67,20 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
     return vec![q];
 }
 
-fn insert_outputs_query(outputs: &[Output]) -> Vec<String> {
+fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Vec<String> {
     if outputs.is_empty() {
         return vec![];
     }
     if outputs.len() > 9000 {
         let mid = outputs.len() / 2;
-        let mut p1 = insert_outputs_query(&outputs[0..mid]);
-        let mut p2 = insert_outputs_query(&outputs[mid..outputs.len()]);
+        let mut p1 = insert_outputs_query(&outputs[0..mid], tx_ids);
+        let mut p2 = insert_outputs_query(&outputs[mid..outputs.len()], tx_ids);
         p1.append(&mut p2);
         return p1;
     }
 
     let mut q: String =
-        "INSERT INTO outputs (height, tx_hash, tx_idx, value, address, coinbase) VALUES ".into();
+        "INSERT INTO outputs (height, tx_id, tx_idx, value, address, coinbase) VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -87,7 +88,7 @@ fn insert_outputs_query(outputs: &[Output]) -> Vec<String> {
         q.write_fmt(format_args!(
             "({}, '\\x{}', {}, {}, {}, {})",
             output.height,
-            output.tx_hash,
+            tx_ids[&output.tx_hash],
             output.tx_idx,
             output.value,
             output
@@ -129,44 +130,44 @@ fn insert_inputs_query(inputs: &[Input]) -> Vec<String> {
     return vec![q];
 }
 
-fn insert_parsed(conn: &Connection, parsed: Vec<Parsed>) -> Result<()> {
-    let mut bs = vec![];
-    let mut ts = vec![];
-    let mut is = vec![];
-    let mut os = vec![];
+struct UtxoSetEntry {
+    id: i64,
+    value: u64,
+}
 
-    for parsed in parsed.into_iter() {
-        let Parsed {
-            mut block,
-            mut txs,
-            mut outputs,
-            mut inputs,
-        } = parsed;
-        bs.push(block);
-        ts.append(&mut txs);
-        is.append(&mut inputs);
-        os.append(&mut outputs);
-    }
-    for s in insert_txs_query(&ts) {
-        conn.batch_execute(&s)?;
-    }
-    for s in insert_inputs_query(&is) {
-        conn.batch_execute(&s)?;
-    }
-    for s in insert_outputs_query(&os) {
-        conn.batch_execute(&s)?;
-    }
+#[derive(Default)]
+struct UtxoSet {
+    entries: HashMap<(TxHash, u32), UtxoSetEntry>,
+}
 
-    for s in insert_blocks_query(&bs) {
-        conn.batch_execute(&s)?;
+impl UtxoSet {
+    fn insert(&mut self, tx_hash: TxHash, tx_idx: u32, id: i64, value: u64) {
+        self.entries
+            .insert((tx_hash, tx_idx), UtxoSetEntry { id, value });
     }
+}
 
-    Ok(())
+fn read_next_tx_id(conn: &Connection) -> Result<i64> {
+    Ok(conn
+        .query("SELECT max(id) FROM txs", &[])?
+        .iter()
+        .next()
+        .map(|row| row.get::<_, i64>(0) + 1)
+        .unwrap_or(0))
 }
 
 fn read_next_block_id(conn: &Connection) -> Result<i64> {
     Ok(conn
         .query("SELECT max(id) FROM blocks", &[])?
+        .iter()
+        .next()
+        .map(|row| row.get::<_, i64>(0) + 1)
+        .unwrap_or(0))
+}
+
+fn read_next_output_id(conn: &Connection) -> Result<i64> {
+    Ok(conn
+        .query("SELECT max(id) FROM outputs", &[])?
         .iter()
         .next()
         .map(|row| row.get::<_, i64>(0) + 1)
@@ -189,12 +190,15 @@ impl Pipeline {
             crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(8);
         let (outputs_tx, input_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
         let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(8);
+        let utxo_set = Arc::new(Mutex::new(UtxoSet::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
             move || {
-                let mut next_id = read_next_block_id(&conn)?;
+                let mut next_id = read_next_tx_id(&conn)?;
                 while let Ok(mut parsed) = txs_rx.recv() {
+                    debug_assert_eq!(next_id, read_next_tx_id(&conn)?);
+
                     let mut batch: Vec<super::Tx> = vec![];
 
                     for parsed in &mut parsed {
@@ -219,10 +223,42 @@ impl Pipeline {
             }
         });
 
+        let outputs_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            move || {
+                let mut next_id = read_next_output_id(&conn)?;
+                while let Ok((mut parsed, tx_ids)) = outputs_rx.recv() {
+                    let mut batch: Vec<super::Output> = vec![];
+
+                    debug_assert_eq!(next_id, read_next_output_id(&conn)?);
+                    for parsed in &mut parsed {
+                        batch.append(&mut parsed.outputs);
+                    }
+
+                    for s in insert_outputs_query(&batch, &tx_ids) {
+                        conn.batch_execute(&s)?;
+                    }
+
+                    let mut utxo_lock = utxo_set.lock().unwrap();
+                    batch.iter().enumerate().for_each(|(i, output)| {
+                        let id = next_id + (i as i64);
+                        let tx_id = tx_ids[&output.tx_hash];
+                        utxo_lock.insert(output.tx_hash, output.tx_idx, tx_id, output.value);
+                    });
+                    drop(utxo_lock);
+
+                    next_id += tx_ids.len() as i64;
+
+                    outputs_tx.send(parsed)?;
+                }
+                Ok(())
+            }
+        });
+
         Ok(Self {
             tx: Some(tx),
             txs_thread: Some(txs_thread),
-            outputs_thread: None,
+            outputs_thread: Some(outputs_thread),
             inputs_thread: None,
             blocks_thread: None,
         })
