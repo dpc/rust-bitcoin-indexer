@@ -14,6 +14,13 @@ pub trait DataStore {
     /// Initi the db schema etc.
     fn wipe(&mut self) -> Result<()>;
 
+    /// We will be adding a lot stuff
+    /// so go fast (eg. drop indices)
+    fn mode_bulk(&mut self) -> Result<()>;
+
+    /// We're at chain-head
+    fn mode_normal(&mut self) -> Result<()>;
+
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;

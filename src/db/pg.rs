@@ -502,6 +502,9 @@ impl Postresql {
 
     fn flush_batch(&mut self) -> Result<()> {
         trace!("Flushing batch with {}txes", self.batch_txs_total);
+        if self.batch.is_empty() {
+            return Ok(());
+        }
         let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
             .par_iter()
             .map(|block_info| super::parse_node_block(&block_info))
@@ -522,14 +525,30 @@ impl Postresql {
 
 impl DataStore for Postresql {
     fn init(&mut self) -> Result<()> {
+        info!("Creating db schema");
         self.connection.batch_execute(include_str!("pg_init.sql"))?;
         Ok(())
     }
 
-
     fn wipe(&mut self) -> Result<()> {
-
+        info!("Wiping db schema");
         self.connection.batch_execute(include_str!("pg_wipe.sql"))?;
+        Ok(())
+    }
+
+    fn mode_bulk(&mut self) -> Result<()> {
+        info!("Entering bulk mode: dropping indices");
+        self.connection
+            .batch_execute(include_str!("pg_drop_indices.sql"))?;
+        Ok(())
+    }
+
+    fn mode_normal(&mut self) -> Result<()> {
+        self.flush_batch();
+        self.flush_workers();
+        info!("Entering normal mode: creating indices");
+        self.connection
+            .batch_execute(include_str!("pg_create_indices.sql"))?;
         Ok(())
     }
 
@@ -573,8 +592,9 @@ impl DataStore for Postresql {
 
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
         info!("Reorg detected at {}H", height);
-        self.flush_batch();
-        self.flush_workers();
+        // If we're doing reorgs, that means we have to be close to chainhead
+        // this will also flush the batch and workers
+        self.mode_normal();
 
         // Always start with removing `blocks` since that invalidates
         // all other data in case of crash

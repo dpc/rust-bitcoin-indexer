@@ -15,7 +15,15 @@ impl DataStore for MemDataStore {
     fn wipe(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
+    fn mode_bulk(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn mode_normal(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
         Ok(self.block_hashes.get(&height).cloned())
     }
