@@ -9,4 +9,10 @@ pub struct Opts {
     pub node_rpc_user: Option<String>,
     #[structopt(long = "rpc-pass")]
     pub node_rpc_pass: Option<String>,
+
+    #[structopt(long = "init-db")]
+    pub init_db: bool,
+
+    #[structopt(long = "wipe-db")]
+    pub wipe_db: bool,
 }

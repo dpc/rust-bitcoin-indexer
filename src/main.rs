@@ -5,6 +5,7 @@ mod opts;
 mod prefetcher;
 mod prelude;
 
+use self::db::DataStore;
 use crate::prelude::*;
 
 use common_failures::{prelude::*, quick_main};
@@ -89,8 +90,20 @@ fn run() -> Result<()> {
     };
     //let mut db = db::mem::MemDataStore::default();
     let mut db = db::pg::Postresql::new()?;
-    let mut indexer = Indexer::new(rpc_info, db)?;
-    indexer.run()
+
+    if opts.wipe_db {
+        db.wipe()?;
+    }
+    if opts.init_db {
+        db.init()?;
+    }
+
+    if !opts.init_db && !opts.wipe_db {
+        let mut indexer = Indexer::new(rpc_info, db)?;
+        indexer.run()?;
+    }
+
+    Ok(())
 }
 
 quick_main!(run);

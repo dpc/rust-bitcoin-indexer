@@ -8,6 +8,12 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 pub trait DataStore {
+    /// Initi the db schema etc.
+    fn init(&mut self) -> Result<()>;
+
+    /// Initi the db schema etc.
+    fn wipe(&mut self) -> Result<()>;
+
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;

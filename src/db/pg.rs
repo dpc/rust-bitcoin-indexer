@@ -521,6 +521,18 @@ impl Postresql {
 }
 
 impl DataStore for Postresql {
+    fn init(&mut self) -> Result<()> {
+        self.connection.batch_execute(include_str!("pg_init.sql"))?;
+        Ok(())
+    }
+
+
+    fn wipe(&mut self) -> Result<()> {
+
+        self.connection.batch_execute(include_str!("pg_wipe.sql"))?;
+        Ok(())
+    }
+
     // TODO: semantics against things in flight are unclear
     // Document.
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {

@@ -59,28 +59,10 @@ createuser bitcoin-indexer
 createdb bitcoin-indexer bitcoin-indexer
 ```
 
-Install `diesel` with `postgresq` support to manage db schema (I need to get rid of this):
-
-```
-cargo install diesel_cli --no-default-features --features postgres
-```
-
-Setup `.env` file with Postgresql settings (URL with password, user, dbname). Example.
+Setup `.env` file with Postgresql settings (URL with password, user, dbname). Example:
 
 ```
 DATABASE_URL=postgres://bitcoin-indexer:bitcoin-indexer@localhost/bitcoin-indexer
-```
-
-Create schema:
-
-```
-diesel migration run
-```
-
-If you ever want to wipe the db :
-
-```
-diesel migration redo
 ```
 
 #### Optimize DB performance for massive inserts
@@ -101,3 +83,5 @@ cargo build --release; \
 	--rpc-user user --rpc-pass password
 ```
 
+
+You can use `--init-db` and `--wipe-db` to initialize and wipe the db.

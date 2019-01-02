@@ -8,6 +8,14 @@ pub struct MemDataStore {
 }
 
 impl DataStore for MemDataStore {
+    fn init(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn wipe(&mut self) -> Result<()> {
+        Ok(())
+    }
+    
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
         Ok(self.block_hashes.get(&height).cloned())
     }
