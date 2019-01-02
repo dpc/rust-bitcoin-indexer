@@ -20,6 +20,9 @@ WIP, Goals:
 
 Install Rust with https://rustup.rs
 
+
+### Bitcoind node
+
 Setup Bitcoind full node, with a config similiar to this:
 
 ```
@@ -44,6 +47,8 @@ walletbroadcast=0
 
 `txindex=1` shouldn't be neccessary, and the only important part here
 is being able to access RPC interface.
+
+### Postgresql
 
 Setup Postgresql DB, with a db and user:pass that can access it. Example:
 
@@ -78,6 +83,15 @@ If you ever want to wipe the db :
 diesel migration redo
 ```
 
+#### Optimize DB performance for massive inserts
+
+Indexing from scratch will dump huge amounts of data into the DB via
+multi-value `INSERT` statements batched in transactions.
+
+[Consider tunning your PG instance](https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql)
+for such workloads.
+
+### Run
 Now everything should be ready. Compile and run with:
 
 ```
