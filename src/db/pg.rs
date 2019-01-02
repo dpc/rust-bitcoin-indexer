@@ -197,7 +197,6 @@ impl UtxoSet {
                 &tx_bytes,
                 &(missing.1 as i32) as &dyn postgres::types::ToSql,
             ];
-            trace!(".");
             let rows = conn.query("SELECT outputs.id, outputs.value FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) WHERE txs.hash = $1 AND outputs.tx_idx = $2",
                       args)?;
             let row = rows
@@ -281,11 +280,16 @@ where
 
 impl Pipeline {
     fn new(in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
-        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
+        /// We use only rendezvous (0-size) channels, to allow passing
+        /// work and parallelism, but without doing any buffering of
+        /// work in the channels. Buffered work does not
+        /// improve performance, and  more things in flight means
+        /// incrased memory usage.
+        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(0);
         let (txs_tx, outputs_rx) =
-            crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(1);
-        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
-        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
+            crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(0);
+        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(0);
+        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(0);
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSet::default()));
 
         let txs_thread = std::thread::spawn({
@@ -333,6 +337,7 @@ impl Pipeline {
             fn_log_err("db_worker_outputs", move || {
                 let mut next_id = read_next_output_id(&conn)?;
                 while let Ok((mut parsed, tx_ids)) = outputs_rx.recv() {
+                    assert_eq!(next_id, read_next_tx_id(&conn)?);
                     let mut batch: Vec<super::Output> = vec![];
 
                     debug_assert_eq!(next_id, read_next_output_id(&conn)?);
@@ -355,7 +360,6 @@ impl Pipeline {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     batch.iter().enumerate().for_each(|(i, output)| {
                         let id = next_id + (i as i64);
-                        // let tx_id = tx_ids[&output.tx_hash];
                         utxo_lock.insert(output.tx_hash, output.tx_idx, id, output.value);
                     });
                     drop(utxo_lock);
