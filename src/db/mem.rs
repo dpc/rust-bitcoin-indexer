@@ -20,6 +20,10 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
+    fn mode_bulk_restarted(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn mode_normal(&mut self) -> Result<()> {
         Ok(())
     }

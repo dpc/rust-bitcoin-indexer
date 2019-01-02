@@ -184,14 +184,21 @@ impl UtxoSet {
         conn: &Connection,
         missing: Vec<(TxHash, u32)>,
     ) -> Result<HashMap<(TxHash, u32), UtxoSetEntry>> {
-        debug!("Fetching {} missing outputs", missing.len());
+        let missing_len = missing.len();
+        debug!("Fetching {} missing outputs", missing_len);
         let mut out = HashMap::default();
 
+        let start = Instant::now();
         for missing in missing {
-            let tx_bytes = (missing.0.as_bytes());
+            let mut tx_bytes = missing.0.to_bytes();
+            tx_bytes.reverse();
             let tx_bytes = &tx_bytes[..];
-            let args = &[&tx_bytes, &missing.1 as &dyn postgres::types::ToSql];
-            let rows = conn.query("SELECT id, value FROM outputs INNER JOIN txs (txs.id = outputs.tx_id) WHERE txs.hash = $1 AND tx_idx = $2",
+            let args = &[
+                &tx_bytes,
+                &(missing.1 as i32) as &dyn postgres::types::ToSql,
+            ];
+            trace!(".");
+            let rows = conn.query("SELECT outputs.id, outputs.value FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) WHERE txs.hash = $1 AND outputs.tx_idx = $2",
                       args)?;
             let row = rows
                 .iter()
@@ -207,6 +214,11 @@ impl UtxoSet {
             );
         }
 
+        trace!(
+            "Fetched {} missing outputs in {}s",
+            missing_len,
+            Instant::now().duration_since(start).as_secs()
+        );
         Ok(out)
     }
 }
@@ -236,8 +248,10 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "SELECT MAX(id) FROM blocks")
 }
 
+type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
 /// Worker Pipepline
-pub struct Pipeline {
+struct Pipeline {
+    in_flight: Arc<Mutex<BlocksInFlight>>,
     tx: Option<crossbeam_channel::Sender<Vec<Parsed>>>,
     txs_thread: Option<std::thread::JoinHandle<Result<()>>>,
     outputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -245,6 +259,7 @@ pub struct Pipeline {
     blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
+// TODO: fail the whole Pipeline somehow
 fn fn_log_err<F>(name: &'static str, mut f: F) -> impl FnMut() -> Result<()>
 where
     F: FnMut() -> Result<()>,
@@ -260,7 +275,7 @@ where
 }
 
 impl Pipeline {
-    fn new() -> Result<Self> {
+    fn new(in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
         let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(1);
         let (txs_tx, outputs_rx) =
             crossbeam_channel::bounded::<(Vec<Parsed>, HashMap<TxHash, i64>)>(1);
@@ -327,7 +342,7 @@ impl Pipeline {
                     }
                     transaction.commit()?;
                     trace!(
-                        "Inserted {} ouputs in {}s",
+                        "Inserted {} outputs in {}s",
                         batch.len(),
                         Instant::now().duration_since(start).as_secs()
                     );
@@ -389,6 +404,7 @@ impl Pipeline {
 
         let blocks_thread = std::thread::spawn({
             let conn = establish_connection()?;
+            let in_flight = in_flight.clone();
             fn_log_err("db_worker_blocks", move || {
                 while let Ok((mut parsed)) = blocks_rx.recv() {
                     let mut batch: Vec<super::Block> = vec![];
@@ -407,11 +423,19 @@ impl Pipeline {
                         batch.len(),
                         Instant::now().duration_since(start).as_secs()
                     );
+                    let mut any_missing = false;
+                    let mut lock = in_flight.lock().unwrap();
+                    for block in &batch {
+                        any_missing = any_missing || lock.remove(&block.height).is_none();
+                    }
+                    drop(lock);
+                    assert!(!any_missing);
                 }
                 Ok(())
             })
         });
         Ok(Self {
+            in_flight,
             tx: Some(tx),
             txs_thread: Some(txs_thread),
             outputs_thread: Some(outputs_thread),
@@ -445,6 +469,8 @@ pub struct Postresql {
     pipeline: Option<Pipeline>,
     batch: Vec<BlockInfo>,
     batch_txs_total: u64,
+
+    in_flight: Arc<Mutex<BlocksInFlight>>,
 }
 
 impl Drop for Postresql {
@@ -462,30 +488,86 @@ impl Postresql {
             cached_max_height: None,
             batch: vec![],
             batch_txs_total: 0,
+            in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
         };
-        s.wipe_inconsistent_data();
+        s.wipe_inconsistent_data()?;
         s.start_workers();
         Ok(s)
     }
 
+    /// Wipe all records with `> height` from table sorted by id
+    ///
+    /// We can use the fact that both `ids` (primary keys) and `height`
+    /// are growing monotonicially, and delete all records with `height`
+    /// greather than a given argument without having a index on `height`
+    /// itself, by using taking a fixed chunk with highest `id` and deleting
+    /// by `height` from it.
+    fn wipe_gt_height_from_id_sorted_table(
+        &mut self,
+        table: &str,
+        id_col_name: &str,
+        height: BlockHeight,
+    ) -> Result<()> {
+        debug!("Wiping {} higher than {}H", table, height);
+        let start = Instant::now();
+        let q = format!("DELETE FROM {table} WHERE {id_col} > (SELECT max({id_col}) - 100000 FROM {table}) AND height > $1;",
+                       table = table, id_col = id_col_name);
+
+        let mut total = 0;
+        loop {
+            let deleted = self.connection.execute(&q, &[&(height as i64)])?;
+            total += deleted;
+            if deleted == 0 {
+                break;
+            }
+        }
+
+        trace!(
+            "Wiped {} records from {} in {}s",
+            total,
+            table,
+            Instant::now().duration_since(start).as_secs()
+        );
+        Ok(())
+    }
+
+    fn wipe_txs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
+        self.wipe_gt_height_from_id_sorted_table("txs", "id", height)
+    }
+
+    fn wipe_inputs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
+        self.wipe_gt_height_from_id_sorted_table("inputs", "output_id", height)
+    }
+
+    fn wipe_outputs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
+        self.wipe_gt_height_from_id_sorted_table("outputs", "id", height)
+    }
+
     /// Wipe all the data that might have been added, before a `block` entry
-    /// was commited to the DB, which is the last one to be added.
-    fn wipe_inconsistent_data(&self) -> Result<()> {
-        // TODO: get highest block, wipe all entries from other tables
-        // with height higher than that
-        //
+    /// was commited to the DB.
+    ///
+    /// `Blocks` is  the last table to have data inserted, and is
+    /// used as a commitment that everything else was inserted already..
+    fn wipe_inconsistent_data(&mut self) -> Result<()> {
+        if let Some(height) = self.get_max_height()? {
+            self.wipe_txs_higher_than_height(height)?;
+            self.wipe_outputs_higher_than_height(height)?;
+            self.wipe_inputs_higher_than_height(height)?;
+        }
+
         Ok(())
     }
 
     fn stop_workers(&mut self) {
         debug!("Stopping DB pipeline workers");
         self.pipeline.take();
+        assert!(self.in_flight.lock().unwrap().is_empty());
     }
 
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(Pipeline::new().unwrap())
+        self.pipeline = Some(Pipeline::new(self.in_flight.clone()).unwrap())
     }
 
     fn flush_workers(&mut self) {
@@ -501,15 +583,22 @@ impl Postresql {
     }
 
     fn flush_batch(&mut self) -> Result<()> {
-        trace!("Flushing batch with {}txes", self.batch_txs_total);
         if self.batch.is_empty() {
             return Ok(());
         }
+        trace!("Flushing batch with {} txes", self.batch_txs_total);
         let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
             .par_iter()
             .map(|block_info| super::parse_node_block(&block_info))
             .collect();
         let parsed = parsed?;
+
+        let mut in_flight = self.in_flight.lock().expect("locking works");
+        for parsed in &parsed {
+            in_flight.insert(parsed.block.height, parsed.block.hash);
+        }
+        drop(in_flight);
+
         self.pipeline
             .as_ref()
             .expect("workers running")
@@ -536,28 +625,44 @@ impl DataStore for Postresql {
         Ok(())
     }
 
-    fn mode_bulk(&mut self) -> Result<()> {
-        info!("Entering bulk mode: dropping indices");
+    fn mode_bulk_restarted(&mut self) -> Result<()> {
+        info!("Entering bulk mode: minimum indices");
         self.connection
-            .batch_execute(include_str!("pg_drop_indices.sql"))?;
+            .batch_execute(include_str!("pg_indices_min.sql"))?;
+        Ok(())
+    }
+
+    fn mode_bulk(&mut self) -> Result<()> {
+        info!("Entering bulk mode: dropping all indices");
+        self.connection
+            .batch_execute(include_str!("pg_indices_none.sql"))?;
         Ok(())
     }
 
     fn mode_normal(&mut self) -> Result<()> {
         self.flush_batch();
         self.flush_workers();
-        info!("Entering normal mode: creating indices");
+        info!("Entering normal mode: creating all indices");
         self.connection
-            .batch_execute(include_str!("pg_create_indices.sql"))?;
+            .batch_execute(include_str!("pg_indices_full.sql"))?;
         Ok(())
     }
 
     // TODO: semantics against things in flight are unclear
     // Document.
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
+        /*
+                self.cached_max_height = self
+                    .connection
+                    .query("SELECT MAX(height) FROM blocks", &[])?
+                    .iter()
+                    .next()
+                    .and_then(|row| row.get::<_, Option<i64>>(0))
+                    .map(|u| u as u64);
+        */
         self.cached_max_height = self
             .connection
-            .query("SELECT MAX(height) FROM blocks", &[])?
+            .query("SELECT height FROM blocks ORDER BY id DESC LIMIT 1", &[])?
             .iter()
             .next()
             .and_then(|row| row.get::<_, Option<i64>>(0))
@@ -574,10 +679,12 @@ impl DataStore for Postresql {
         }
 
         // TODO: This could be done better, if we were just tracking
-        // things in flight
-        eprintln!("TODO: Unnecessary flush");
+        // things in flight better
         self.flush_batch();
-        self.flush_workers();
+        if !self.in_flight.lock().unwrap().is_empty() {
+            eprintln!("TODO: Unnecessary flush");
+            self.flush_workers();
+        }
 
         Ok(self
             .connection
@@ -587,7 +694,11 @@ impl DataStore for Postresql {
             )?
             .iter()
             .next()
-            .map(|row| BlockHash::from(row.get::<_, Vec<u8>>(0).as_slice())))
+            .map(|row| row.get::<_, Vec<u8>>(0))
+            .map(|mut human_bytes| {
+                human_bytes.reverse();
+                BlockHash::from(human_bytes.as_slice())
+            }))
     }
 
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {

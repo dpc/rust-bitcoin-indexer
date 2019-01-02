@@ -7,11 +7,12 @@ mod prelude;
 
 use self::db::DataStore;
 use crate::prelude::*;
+use log::info;
 
 use common_failures::{prelude::*, quick_main};
 
 struct Indexer {
-    node_starting_height: u64,
+    node_starting_chainhead_height: u64,
     rpc: bitcoincore_rpc::Client,
     rpc_info: RpcInfo,
     db: Box<dyn db::DataStore>,
@@ -24,35 +25,39 @@ impl Indexer {
             rpc_info.user.clone(),
             rpc_info.password.clone(),
         );
-        let node_starting_height = rpc.get_block_count()?;
+        let node_starting_chainhead_height = rpc.get_block_count()?;
+        info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {
             rpc,
             rpc_info,
-            node_starting_height,
+            node_starting_chainhead_height,
             db: Box::new(db),
         })
     }
 
     fn process_block(&mut self, binfo: BlockInfo) -> Result<()> {
         let block_height = binfo.height;
-        if block_height >= self.node_starting_height || block_height % 1000 == 0 {
-            println!("Block {}H: {}", binfo.height, binfo.hash);
+        if block_height >= self.node_starting_chainhead_height || block_height % 1000 == 0 {
+            eprintln!("Block {}H: {}", binfo.height, binfo.hash);
         }
 
         if let Some(db_hash) = self.db.get_hash_by_height(block_height)? {
             if db_hash != binfo.hash {
-                println!("Block {}H: {} - reorg", block_height, binfo.hash);
+                info!(
+                    "Node block != db block at {}H; {} != {} - reorg",
+                    block_height, binfo.hash, db_hash
+                );
                 self.db.reorg_at_height(block_height);
                 self.db.insert(binfo)?;
             }
         } else {
             self.db.insert(binfo)?;
-            if block_height >= self.node_starting_height {
+            if block_height >= self.node_starting_chainhead_height {
                 // After we've reached the node chain-head, we want everything
                 // to appear immediately, even if it's slower
                 self.db.flush()?;
-                if block_height == self.node_starting_height {
+                if block_height == self.node_starting_chainhead_height {
                     self.db.mode_normal()?;
                 }
             }
@@ -63,12 +68,14 @@ impl Indexer {
 
     fn run(&mut self) -> Result<()> {
         let start = if let Some(last_indexed_height) = self.db.get_max_height()? {
-            assert!(last_indexed_height <= self.node_starting_height);
-            let blocks_to_catch_up = self.node_starting_height - last_indexed_height;
-            if blocks_to_catch_up <= self.node_starting_height / 10 {
+            info!("Last indexed block {}H", last_indexed_height);
+
+            assert!(last_indexed_height <= self.node_starting_chainhead_height);
+            let blocks_to_catch_up = self.node_starting_chainhead_height - last_indexed_height;
+            if blocks_to_catch_up <= self.node_starting_chainhead_height / 10 {
                 self.db.mode_normal()?;
             } else {
-                self.db.mode_bulk()?;
+                self.db.mode_bulk_restarted()?;
             }
             let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
             Some((
@@ -80,6 +87,7 @@ impl Indexer {
         } else {
             // test indices dropping and creation
             self.db.mode_bulk()?;
+            self.db.mode_bulk_restarted()?;
             self.db.mode_normal()?;
             self.db.mode_bulk()?;
 
