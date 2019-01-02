@@ -321,9 +321,11 @@ impl Pipeline {
                     }
                     trace!("Inserting {} outputs...", batch.len());
                     let start = Instant::now();
+                    let transaction = conn.transaction()?;
                     for s in insert_outputs_query(&batch, &tx_ids) {
-                        conn.batch_execute(&s)?;
+                        transaction.batch_execute(&s)?;
                     }
+                    transaction.commit()?;
                     trace!(
                         "Inserted {} ouputs in {}s",
                         batch.len(),
@@ -368,9 +370,11 @@ impl Pipeline {
 
                     trace!("Inserting {} inputs...", batch.len());
                     let start = Instant::now();
+                    let transaction = conn.transaction()?;
                     for s in insert_inputs_query(&batch, &output_ids) {
-                        conn.batch_execute(&s)?;
+                        transaction.batch_execute(&s)?;
                     }
+                    transaction.commit()?;
                     trace!(
                         "Inserted {} inputs in {}s",
                         batch.len(),
@@ -582,7 +586,7 @@ impl DataStore for Postresql {
 
         self.batch_txs_total += info.block.txdata.len() as u64;
         self.batch.push(info);
-        if self.batch_txs_total > 100_000 {
+        if self.batch_txs_total > 500_000 {
             self.flush_batch();
         }
         Ok(())
