@@ -223,11 +223,16 @@ impl UtxoSet {
     }
 }
 
-/// TODO: Use `select currval(pg_get_serial_sequence('txs', 'id')) as id;` instead
-fn read_next_id(conn: &Connection, q: &str) -> Result<i64> {
+fn read_next_id(conn: &Connection, table_name: &str, id_col_name: &str) -> Result<i64> {
+    // explanation: https://dba.stackexchange.com/a/78228
+    let q = format!(
+        "select setval(pg_get_serial_sequence('{table}', '{id_col}'), nextval(pg_get_serial_sequence('{table}', '{id_col}')) -1) as id",
+        table = table_name,
+        id_col = id_col_name
+    );
     const PG_STARTING_ID: i64 = 1;
     Ok(conn
-        .query(q, &[])?
+        .query(&q, &[])?
         .iter()
         .next()
         .expect("at least one row")
@@ -237,15 +242,15 @@ fn read_next_id(conn: &Connection, q: &str) -> Result<i64> {
 }
 
 fn read_next_tx_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "SELECT MAX(id) FROM txs")
+    read_next_id(conn, "txs", "id")
 }
 
 fn read_next_output_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "SELECT MAX(id) FROM outputs")
+    read_next_id(conn, "outputs", "id")
 }
 
 fn read_next_block_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "SELECT MAX(id) FROM blocks")
+    read_next_id(conn, "blocks", "id")
 }
 
 type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
