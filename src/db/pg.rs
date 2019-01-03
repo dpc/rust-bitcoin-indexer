@@ -71,40 +71,84 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
     return vec![q];
 }
 
-fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Vec<String> {
-    if outputs.is_empty() {
-        return vec![];
-    }
-    if outputs.len() > 9000 {
-        let mid = outputs.len() / 2;
-        let mut p1 = insert_outputs_query(&outputs[0..mid], tx_ids);
-        let mut p2 = insert_outputs_query(&outputs[mid..outputs.len()], tx_ids);
-        p1.append(&mut p2);
-        return p1;
-    }
+fn insert_outputs_batched<'t>(
+    transaction: &Transaction<'t>,
+    mut outputs: &[Output],
+    tx_ids: &HashMap<TxHash, i64>,
+) -> Result<()> {
+    let mut q_cache: HashMap<usize, postgres::stmt::Statement<'t>> = default();
 
-    let mut q: String =
-        "INSERT INTO outputs (height, tx_id, tx_idx, value, address, coinbase) VALUES ".into();
-    for (i, output) in outputs.iter().enumerate() {
-        if i > 0 {
-            q.push_str(",")
+    loop {
+        if outputs.is_empty() {
+            break;
         }
-        q.write_fmt(format_args!(
-            "({},{},{},{},{},{})",
-            output.height,
-            tx_ids[&output.tx_hash],
-            output.tx_idx,
-            output.value,
-            output
-                .address
-                .as_ref()
-                .map_or("null".into(), |s| format!("'{}'", s)),
-            output.coinbase,
-        ))
-        .unwrap();
+
+        let cur_batch_size = std::cmp::min(1000, outputs.len());
+        let (cur_outputs, rest) = outputs.split_at(cur_batch_size);
+        outputs = rest;
+
+        let q = q_cache.entry(cur_batch_size).or_insert_with(|| {
+            let mut q: String =
+                "INSERT INTO outputs (height, tx_id, tx_idx, value, address, coinbase) VALUES "
+                    .into();
+            let mut args_i = 1;
+            for row_i in 0..cur_batch_size {
+                if row_i > 0 {
+                    q.push_str(",")
+                }
+                q.write_fmt(format_args!(
+                    "(${},${},${},${},${},${})",
+                    args_i,
+                    args_i + 1,
+                    args_i + 2,
+                    args_i + 3,
+                    args_i + 4,
+                    args_i + 5
+                ))
+                .unwrap();
+                args_i += 6;
+            }
+            q.write_str(";");
+            transaction
+                .prepare_cached(&q)
+                .expect("well-formated sql statement")
+        });
+
+        // TODO: this might be unnecessary
+        let cur_outputs: Vec<_> = cur_outputs
+            .into_iter()
+            .map(|output| {
+                (
+                    output.height as i64,
+                    tx_ids[&output.tx_hash],
+                    output.tx_idx as i32,
+                    output.value as i64,
+                    output
+                        .address
+                        .as_ref()
+                        .map_or("null".into(), |s| format!("'{}'", s)),
+                    output.coinbase,
+                )
+            })
+            .collect();
+
+        q.execute(
+            &cur_outputs
+                .iter()
+                .flat_map(|o| {
+                    vec![
+                        &o.0 as &dyn postgres::types::ToSql,
+                        &o.1,
+                        &o.2,
+                        &o.3,
+                        &o.4,
+                        &o.5,
+                    ]
+                })
+                .collect::<Vec<&dyn postgres::types::ToSql>>(),
+        )?;
     }
-    q.write_str(";");
-    return vec![q];
+    Ok(())
 }
 
 fn insert_inputs_query(
@@ -331,7 +375,7 @@ impl Pipeline {
                         inputs.append(&mut parsed.inputs);
                     }
 
-                    trace!("Inserting {} txs from batch {}...", txs.len(), batch_id);
+                    trace!("Inserting {} txs from batch {} ..", txs.len(), batch_id);
                     let start = Instant::now();
                     for s in insert_txs_query(&txs) {
                         conn.batch_execute(&s)?;
@@ -373,9 +417,10 @@ impl Pipeline {
                     );
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
-                    for s in insert_outputs_query(&outputs, &tx_ids) {
-                        transaction.batch_execute(&s)?;
-                    }
+                    insert_outputs_batched(&transaction, &outputs, &tx_ids)?;
+                    // for s in insert_outputs_query(&outputs, &tx_ids) {
+                    //     transaction.batch_execute(&s)?;
+                    // }
                     transaction.commit()?;
                     trace!(
                         "Inserted {} outputs from batch {} in {}s",
@@ -779,7 +824,7 @@ impl DataStore for Postresql {
 
         self.batch_txs_total += info.block.txdata.len() as u64;
         self.batch.push(info);
-        if self.batch_txs_total > 500_000 {
+        if self.batch_txs_total > 50_000 {
             self.flush_batch();
         }
         Ok(())
