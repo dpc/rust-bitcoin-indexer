@@ -333,9 +333,11 @@ impl Pipeline {
 
                     trace!("Inserting {} txs from batch {}...", txs.len(), batch_id);
                     let start = Instant::now();
+                    let transaction = conn.transaction()?;
                     for s in insert_txs_query(&txs) {
-                        conn.batch_execute(&s)?;
+                        transaction.batch_execute(&s)?;
                     }
+                    transaction.commit()?;
                     trace!(
                         "Inserted {} txs from batch {} in {}s",
                         txs.len(),
