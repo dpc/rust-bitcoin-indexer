@@ -781,7 +781,7 @@ impl DataStore for Postresql {
 
         self.batch_txs_total += info.block.txdata.len() as u64;
         self.batch.push(info);
-        if self.batch_txs_total > 500_000 {
+        if self.batch_txs_total > 50_000 {
             self.flush_batch();
         }
         Ok(())
