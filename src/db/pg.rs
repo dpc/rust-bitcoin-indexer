@@ -135,7 +135,27 @@ fn insert_inputs_query(
         .unwrap();
     }
     q.write_str(";");
-    return vec![q];
+    vec![q]
+}
+
+fn fetch_outputs_query(outputs: &[(TxHash, u32)]) -> Vec<String> {
+    if outputs.len() > 1500 {
+        let mid = outputs.len() / 2;
+        let mut p1 = fetch_outputs_query(&outputs[0..mid]);
+        let mut p2 = fetch_outputs_query(&outputs[mid..outputs.len()]);
+        p1.append(&mut p2);
+        return p1;
+    }
+    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) WHERE (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
+    for (i, output) in outputs.iter().enumerate() {
+        if i > 0 {
+            q.push_str(",")
+        }
+        q.write_fmt(format_args!("('\\x{}'::bytea,{})", output.0, output.1))
+            .unwrap();
+    }
+    q.write_str(" );");
+    vec![q]
 }
 
 struct UtxoSetEntry {
@@ -189,28 +209,22 @@ impl UtxoSet {
         let mut out = HashMap::default();
 
         let start = Instant::now();
-        for missing in missing {
-            let mut tx_bytes = missing.0.to_bytes();
-            tx_bytes.reverse();
-            let tx_bytes = &tx_bytes[..];
-            let args = &[
-                &tx_bytes,
-                &(missing.1 as i32) as &dyn postgres::types::ToSql,
-            ];
-            let rows = conn.query("SELECT outputs.id, outputs.value FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) WHERE txs.hash = $1 AND outputs.tx_idx = $2",
-                      args)?;
-            let row = rows
-                .iter()
-                .next()
-                .ok_or_else(|| format_err!("output {}:{} not found", missing.0, missing.1))?;
-
-            out.insert(
-                (missing.0, missing.1),
-                UtxoSetEntry {
-                    id: row.get(0),
-                    value: row.get::<_, i64>(1) as u64,
-                },
-            );
+        let missing: Vec<_> = missing.into_iter().collect();
+        for q in fetch_outputs_query(&missing) {
+            for row in &conn.query(&q, &[])? {
+                let hash = {
+                    let mut human_bytes = row.get::<_, Vec<u8>>(2);
+                    human_bytes.reverse();
+                    BlockHash::from(human_bytes.as_slice())
+                };
+                out.insert(
+                    (hash, row.get::<_, i32>(3) as u32),
+                    UtxoSetEntry {
+                        id: row.get(0),
+                        value: row.get::<_, i64>(1) as u64,
+                    },
+                );
+            }
         }
 
         trace!(
@@ -256,7 +270,7 @@ type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
 /// Worker Pipepline
 struct Pipeline {
     in_flight: Arc<Mutex<BlocksInFlight>>,
-    tx: Option<crossbeam_channel::Sender<Vec<Parsed>>>,
+    tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
     txs_thread: Option<std::thread::JoinHandle<Result<()>>>,
     outputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
     inputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -285,22 +299,24 @@ impl Pipeline {
         /// work in the channels. Buffered work does not
         /// improve performance, and  more things in flight means
         /// incrased memory usage.
-        let (tx, txs_rx) = crossbeam_channel::bounded::<Vec<Parsed>>(0);
+        let (tx, txs_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
         let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
+            u64,
             Vec<Block>,
             Vec<Output>,
             Vec<Input>,
             HashMap<TxHash, i64>,
         )>(0);
-        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<(Vec<Block>, Vec<Input>)>(0);
-        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<Vec<Block>>(0);
+        let (outputs_tx, inputs_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>)>(0);
+        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Block>)>(0);
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSet::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
             fn_log_err("db_worker_txs", move || {
                 let mut next_id = read_next_tx_id(&conn)?;
-                while let Ok(parsed) = txs_rx.recv() {
+                while let Ok((batch_id, parsed)) = txs_rx.recv() {
                     assert_eq!(next_id, read_next_tx_id(&conn)?);
 
                     let mut blocks: Vec<super::Block> = vec![];
@@ -315,14 +331,15 @@ impl Pipeline {
                         inputs.append(&mut parsed.inputs);
                     }
 
-                    trace!("Inserting {} txs...", txs.len());
+                    trace!("Inserting {} txs from batch {}...", txs.len(), batch_id);
                     let start = Instant::now();
                     for s in insert_txs_query(&txs) {
                         conn.batch_execute(&s)?;
                     }
                     trace!(
-                        "Inserted {} txs in {}s",
+                        "Inserted {} txs from batch {} in {}s",
                         txs.len(),
+                        batch_id,
                         Instant::now().duration_since(start).as_secs()
                     );
 
@@ -335,7 +352,7 @@ impl Pipeline {
 
                     next_id += batch_len as i64;
 
-                    txs_tx.send((blocks, outputs, inputs, tx_ids))?;
+                    txs_tx.send((batch_id, blocks, outputs, inputs, tx_ids))?;
                 }
                 Ok(())
             })
@@ -346,10 +363,14 @@ impl Pipeline {
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_outputs", move || {
                 let mut next_id = read_next_output_id(&conn)?;
-                while let Ok((blocks, outputs, inputs, tx_ids)) = outputs_rx.recv() {
+                while let Ok((batch_id, blocks, outputs, inputs, tx_ids)) = outputs_rx.recv() {
                     assert_eq!(next_id, read_next_output_id(&conn)?);
 
-                    trace!("Inserting {} outputs...", outputs.len());
+                    trace!(
+                        "Inserting {} outputs from batch {}...",
+                        outputs.len(),
+                        batch_id
+                    );
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
                     for s in insert_outputs_query(&outputs, &tx_ids) {
@@ -357,8 +378,9 @@ impl Pipeline {
                     }
                     transaction.commit()?;
                     trace!(
-                        "Inserted {} outputs in {}s",
+                        "Inserted {} outputs from batch {} in {}s",
                         outputs.len(),
+                        batch_id,
                         Instant::now().duration_since(start).as_secs()
                     );
 
@@ -371,7 +393,7 @@ impl Pipeline {
 
                     next_id += outputs.len() as i64;
 
-                    outputs_tx.send((blocks, inputs))?;
+                    outputs_tx.send((batch_id, blocks, inputs))?;
                 }
                 Ok(())
             })
@@ -381,7 +403,7 @@ impl Pipeline {
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_inputs", move || {
-                while let Ok((blocks, inputs)) = inputs_rx.recv() {
+                while let Ok((batch_id, blocks, inputs)) = inputs_rx.recv() {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| (i.utxo_tx_hash, i.utxo_tx_idx)));
@@ -391,7 +413,11 @@ impl Pipeline {
                         output_ids.insert(k, v);
                     }
 
-                    trace!("Inserting {} inputs...", inputs.len());
+                    trace!(
+                        "Inserting {} inputs from batch {}...",
+                        inputs.len(),
+                        batch_id
+                    );
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
                     for s in insert_inputs_query(&inputs, &output_ids) {
@@ -399,12 +425,13 @@ impl Pipeline {
                     }
                     transaction.commit()?;
                     trace!(
-                        "Inserted {} inputs in {}s",
+                        "Inserted {} inputs from batch {} in {}s",
                         inputs.len(),
+                        batch_id,
                         Instant::now().duration_since(start).as_secs()
                     );
 
-                    inputs_tx.send(blocks)?;
+                    inputs_tx.send((batch_id, blocks))?;
                 }
                 Ok(())
             })
@@ -414,15 +441,20 @@ impl Pipeline {
             let conn = establish_connection()?;
             let in_flight = in_flight.clone();
             fn_log_err("db_worker_blocks", move || {
-                while let Ok(blocks) = blocks_rx.recv() {
-                    trace!("Inserting {} blocks...", blocks.len());
+                while let Ok((batch_id, blocks)) = blocks_rx.recv() {
+                    trace!(
+                        "Inserting {} blocks from batch {}...",
+                        blocks.len(),
+                        batch_id
+                    );
                     let start = Instant::now();
                     for s in insert_blocks_query(&blocks) {
                         conn.batch_execute(&s)?;
                     }
                     trace!(
-                        "Inserted {} blocks in {}s",
+                        "Inserted {} blocks from batch {} in {}s",
                         blocks.len(),
+                        batch_id,
                         Instant::now().duration_since(start).as_secs()
                     );
                     info!(
@@ -480,6 +512,7 @@ pub struct Postresql {
     pipeline: Option<Pipeline>,
     batch: Vec<BlockInfo>,
     batch_txs_total: u64,
+    batch_id: u64,
 
     in_flight: Arc<Mutex<BlocksInFlight>>,
 }
@@ -499,6 +532,7 @@ impl Postresql {
             cached_max_height: None,
             batch: vec![],
             batch_txs_total: 0,
+            batch_id: 0,
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
         };
         s.wipe_inconsistent_data()?;
@@ -597,7 +631,11 @@ impl Postresql {
         if self.batch.is_empty() {
             return Ok(());
         }
-        trace!("Flushing batch with {} txes", self.batch_txs_total);
+        trace!(
+            "Flushing batch {}, with {} txes",
+            self.batch_id,
+            self.batch_txs_total
+        );
         let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
             .par_iter()
             .map(|block_info| super::parse_node_block(&block_info))
@@ -616,9 +654,10 @@ impl Postresql {
             .tx
             .as_ref()
             .expect("tx not null")
-            .send(parsed);
+            .send((self.batch_id, parsed));
         trace!("Batch flushed");
         self.batch_txs_total = 0;
+        self.batch_id += 1;
         Ok(())
     }
 }
