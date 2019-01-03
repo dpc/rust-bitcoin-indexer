@@ -71,6 +71,64 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
     return vec![q];
 }
 
+fn insert_txs_batched<'t>(transaction: &Transaction<'t>, mut txs: &[Tx]) -> Result<()> {
+    let mut q_cache: HashMap<usize, postgres::stmt::Statement<'t>> = default();
+
+    loop {
+        if txs.is_empty() {
+            break;
+        }
+
+        let cur_batch_size = std::cmp::min(1000, txs.len());
+        let (cur_txs, rest) = txs.split_at(cur_batch_size);
+        txs = rest;
+
+        let q = q_cache.entry(cur_batch_size).or_insert_with(|| {
+            let mut q: String = "INSERT INTO txs (height, hash, coinbase) VALUES ".into();
+            let mut args_i = 1;
+            for row_i in 0..cur_batch_size {
+                if row_i > 0 {
+                    q.push_str(",")
+                }
+                q.write_fmt(format_args!(
+                    "(${},${},${})",
+                    args_i,
+                    args_i + 1,
+                    args_i + 2,
+                ))
+                .unwrap();
+                args_i += 3;
+            }
+            q.write_str(";");
+            transaction
+                .prepare_cached(&q)
+                .expect("well-formated sql statement")
+        });
+
+        let cur_txs: Vec<_> = cur_txs
+            .into_iter()
+            .map(|tx| {
+                (
+                    tx.height as i64,
+                    {
+                        let mut v = tx.hash.to_bytes();
+                        v.reverse();
+                        v.to_vec()
+                    },
+                    tx.coinbase,
+                )
+            })
+            .collect();
+
+        q.execute(
+            &cur_txs
+                .iter()
+                .flat_map(|o| vec![&o.0 as &dyn postgres::types::ToSql, &o.1, &o.2])
+                .collect::<Vec<&dyn postgres::types::ToSql>>(),
+        )?;
+    }
+    Ok(())
+}
 fn insert_outputs_batched<'t>(
     transaction: &Transaction<'t>,
     mut outputs: &[Output],
@@ -114,7 +172,6 @@ fn insert_outputs_batched<'t>(
                 .expect("well-formated sql statement")
         });
 
-        // TODO: this might be unnecessary
         let cur_outputs: Vec<_> = cur_outputs
             .into_iter()
             .map(|output| {
@@ -377,9 +434,13 @@ impl Pipeline {
 
                     trace!("Inserting {} txs from batch {} ..", txs.len(), batch_id);
                     let start = Instant::now();
+
+                    let transaction = conn.transaction()?;
+                    // insert_txs_batched(&transaction, &txs)?;
                     for s in insert_txs_query(&txs) {
-                        conn.batch_execute(&s)?;
+                        transaction.batch_execute(&s)?;
                     }
+                    transaction.commit()?;
                     trace!(
                         "Inserted {} txs from batch {} in {}s",
                         txs.len(),
