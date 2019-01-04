@@ -118,3 +118,4 @@ cargo build --release; \
 You can use `--init-db` and `--wipe-db` to initialize and wipe the db.
 
 For logging set env. var. `RUST_LOG` to `rust_bitcoin_indexer` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
+**Warning**: Do not turn on logging in product! It's slow: https://github.com/sebasmagri/env_logger/issues/123 .
