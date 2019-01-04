@@ -88,15 +88,15 @@ On software level `pg.rs` already implements the following optimizations:
 * once restarted, only minimum indices are created (for UTXO fetching)
 * all indices are created only after reach the chain-head
 
-You can tune your system for best performance too:
+Tune your system for best performance too:
 
 * [Consider tunning your PG instance][tune-psql] for such workloads.;
-  disable barriers, align to SSD; you can mount your fs in more
-  risky-mode for initial sync, and revert back to safe settings
-  aftewards;
+  
 * [Make sure your DB is on a performant file-system][perf-fs]; generally COW filesystems perform poorly
   for databases, without providing any value; [on `btrfs` you can disable COW per directory][chattr];
-  eg. `chattr -R +C /var/lib/postgresql/9.6/`;
+  eg. `chattr -R +C /var/lib/postgresql/9.6/`; On other FSes: disable barriers, align to SSD; you can
+  mount your fs in more risky-mode for initial sync, and revert back to safe settings
+  aftewards.
 
 [perf-fs]: https://www.slideshare.net/fuzzycz/postgresql-on-ext4-xfs-btrfs-and-zfs
 [tune-psql]: https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql
