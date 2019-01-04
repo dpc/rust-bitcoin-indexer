@@ -65,13 +65,42 @@ Setup `.env` file with Postgresql settings (URL with password, user, dbname). Ex
 DATABASE_URL=postgres://bitcoin-indexer:bitcoin-indexer@localhost/bitcoin-indexer
 ```
 
-#### Optimize DB performance for massive inserts
+#### Optimize DB performance for massive amount of inserts!
 
-Indexing from scratch will dump huge amounts of data into the DB via
-multi-value `INSERT` statements batched in transactions.
+**This one is very important!!!**
 
-[Consider tunning your PG instance](https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql)
-for such workloads.
+Indexing from scratch will dump huge amounts of data into the DB.
+If you don't want to wait for the initial indexing days or weeks,
+you should carefully review this section.
+
+On software level `pg.rs` already implements the following optimizations:
+
+* **until reaching the chain-head all tables are `UNLOGGED`**; this gives
+  great speed boost, but is **not crash-resistant**; keep your Postgresql
+  stable; in case of it crashing during initial sync, you will have to
+  start from scratch;
+* inserts are made using multi-row value inserts;
+* multiple multi-row insert statements are batched into one transaction;
+* initial sync starts with no indices and utxo set is cached in memory;
+  try not to stop the indexer once started;
+* once restarted, missing UTXOs are fetched from the db, but new ones
+  are still being cached in memory;
+* once restarted, only minimum indices are created (for UTXO fetching)
+* all indices are created only after reach the chain-head
+
+You can tune your system for best performance too:
+
+* [Consider tunning your PG instance][tune-psql] for such workloads.;
+  disable barriers, align to SSD; you can mount your fs in more
+  risky-mode for initial sync, and revert back to safe settings
+  aftewards;
+* [Make sure your DB is on a performant file-system][perf-fs]; generally COW filesystems perform poorly
+  for databases, without providing any value; [on `btrfs` you can disable COW per directory][chattr];
+  eg. `chattr -R +C /var/lib/postgresql/9.6/`;
+
+[perf-fs]: https://www.slideshare.net/fuzzycz/postgresql-on-ext4-xfs-btrfs-and-zfs
+[tune-psql]: https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql
+[chattr]: https://www.kossboss.com/btrfs-disabling-cow-on-a-file-or-directory-nodatacow/
 
 ### Run
 Now everything should be ready. Compile and run with:
