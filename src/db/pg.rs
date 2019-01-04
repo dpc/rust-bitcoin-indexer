@@ -243,7 +243,7 @@ impl UtxoSet {
 fn read_next_id(conn: &Connection, table_name: &str, id_col_name: &str) -> Result<i64> {
     // explanation: https://dba.stackexchange.com/a/78228
     let q = format!(
-        "select setval(pg_get_serial_sequence('{table}', '{id_col}'), nextval(pg_get_serial_sequence('{table}', '{id_col}')) -1) as id",
+        "select setval(pg_get_serial_sequence('{table}', '{id_col}'), GREATEST(nextval(pg_get_serial_sequence('{table}', '{id_col}')) - 1, 1)) as id",
         table = table_name,
         id_col = id_col_name
     );
