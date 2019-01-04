@@ -2,10 +2,8 @@
 
 An experiment in indexing Bitcoin, in Rust.
 
-
-Query blocks using JsonRPC, dump them into Postgres. Handle
-reorg detections.
-
+Query blocks using JsonRPC, dump them into Postgres. After reaching
+chain-head, keep indexing in real-time and handle reorgs.
 
 WIP, Goals:
 
@@ -29,7 +27,6 @@ Setup Bitcoind full node, with a config similiar to this:
 # [core]
 # Run in the background as a daemon and accept commands.
 daemon=0
-txindex=1
 
 # [rpc]
 # Accept command line and JSON-RPC commands.
@@ -45,8 +42,7 @@ disablewallet=1
 walletbroadcast=0
 ```
 
-`txindex=1` shouldn't be neccessary, and the only important part here
-is being able to access RPC interface.
+The only important part here is being able to access JSON-RPC interface.
 
 ### Postgresql
 
@@ -70,7 +66,7 @@ DATABASE_URL=postgres://bitcoin-indexer:bitcoin-indexer@localhost/bitcoin-indexe
 **This one is very important!!!**
 
 Indexing from scratch will dump huge amounts of data into the DB.
-If you don't want to wait for the initial indexing days or weeks,
+If you don't want to wait for the initial indexing to complete for days or weeks,
 you should carefully review this section.
 
 On software level `pg.rs` already implements the following optimizations:
@@ -91,7 +87,6 @@ On software level `pg.rs` already implements the following optimizations:
 Tune your system for best performance too:
 
 * [Consider tunning your PG instance][tune-psql] for such workloads.;
-  
 * [Make sure your DB is on a performant file-system][perf-fs]; generally COW filesystems perform poorly
   for databases, without providing any value; [on `btrfs` you can disable COW per directory][chattr];
   eg. `chattr -R +C /var/lib/postgresql/9.6/`; On other FSes: disable barriers, align to SSD; you can
@@ -102,7 +97,11 @@ Tune your system for best performance too:
 [tune-psql]: https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql
 [chattr]: https://www.kossboss.com/btrfs-disabling-cow-on-a-file-or-directory-nodatacow/
 
+Possibly ask an experienced db admin if anything more can be done. We're talking
+about inserting around billion records into 3 tables each.
+
 ### Run
+
 Now everything should be ready. Compile and run with:
 
 ```
@@ -112,10 +111,11 @@ cargo build --release; \
 	--rpc-user user --rpc-pass password
 ```
 
+in a directory containing the `.env` file.
 
 #### More options
 
 You can use `--init-db` and `--wipe-db` to initialize and wipe the db.
 
 For logging set env. var. `RUST_LOG` to `rust_bitcoin_indexer` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
-**Warning**: Do not turn on logging in product! It's slow: https://github.com/sebasmagri/env_logger/issues/123 .
+**Warning**: Do not turn on logging in production! It's very slow: https://github.com/sebasmagri/env_logger/issues/123 .
