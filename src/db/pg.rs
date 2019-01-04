@@ -208,6 +208,10 @@ impl UtxoSet {
         debug!("Fetching {} missing outputs", missing_len);
         let mut out = HashMap::default();
 
+        if missing.is_empty() {
+            return Ok(HashMap::default());
+        }
+
         let start = Instant::now();
         let missing: Vec<_> = missing.into_iter().collect();
         for q in fetch_outputs_query(&missing) {
