@@ -9,6 +9,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    time::Duration,
 };
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
@@ -17,7 +18,7 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     loop {
         match f() {
             Err(e) => {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                std::thread::sleep(Duration::from_millis(delay_ms));
                 if count % 1000 == 0 {
                     eprintln!("{}; retrying ...", e.display_causes_and_backtrace());
                 }
@@ -266,12 +267,16 @@ impl Worker {
             match self.get_block_by_height(height) {
                 Err(e) => {
                     self.insert_into_retry_set(height);
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        self.retry_count as u64 * 1000 + 100,
-                    ));
-                    self.retry_count += 1;
-                    if self.retry_count % 2 == 0 {
-                        eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
+                    if e.to_string().contains("Block height out of range") {
+                        std::thread::sleep(Duration::from_secs(1));
+                    } else {
+                        std::thread::sleep(Duration::from_millis(
+                            self.retry_count as u64 * 1000 + 100,
+                        ));
+                        self.retry_count += 1;
+                        if self.retry_count % 5 == 0 {
+                            eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
+                        }
                     }
                 }
                 Ok(item) => {
