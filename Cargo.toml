@@ -25,7 +25,7 @@ insideout = "*"
 num_cpus = "1"
 log = "0.4"
 rayon = "1"
-env_logger = "*"
+env_logger = { version = "*", default-features = false, features = ["termcolor", "atty", "humantime"]}
 # r2d2 = "*"
 
 [dev-dependencies]
