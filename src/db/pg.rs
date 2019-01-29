@@ -541,9 +541,17 @@ impl Postresql {
             batch_id: 0,
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
         };
+        s.init()?;
         s.wipe_inconsistent_data()?;
         s.start_workers();
         Ok(s)
+    }
+
+    fn init(&mut self) -> Result<()> {
+        info!("Creating db schema");
+        self.connection
+            .batch_execute(include_str!("pg_init_base.sql"))?;
+        Ok(())
     }
 
     /// Wipe all records with `> height` from table sorted by id
@@ -669,29 +677,23 @@ impl Postresql {
 }
 
 impl DataStore for Postresql {
-    fn init(&mut self) -> Result<()> {
-        info!("Creating db schema");
-        self.connection.batch_execute(include_str!("pg_init.sql"))?;
-        Ok(())
-    }
-
     fn wipe(&mut self) -> Result<()> {
         info!("Wiping db schema");
         self.connection.batch_execute(include_str!("pg_wipe.sql"))?;
         Ok(())
     }
 
-    fn mode_bulk_restarted(&mut self) -> Result<()> {
+    fn mode_bulk(&mut self) -> Result<()> {
         info!("Entering bulk mode: minimum indices");
         self.connection
-            .batch_execute(include_str!("pg_indices_min.sql"))?;
+            .batch_execute(include_str!("pg_mode_bulk.sql"))?;
         Ok(())
     }
 
-    fn mode_bulk(&mut self) -> Result<()> {
-        info!("Entering bulk mode: dropping all indices");
+    fn mode_fresh(&mut self) -> Result<()> {
+        info!("Entering fresh mode: dropping all indices");
         self.connection
-            .batch_execute(include_str!("pg_indices_none.sql"))?;
+            .batch_execute(include_str!("pg_mode_fresh.sql"))?;
         Ok(())
     }
 
@@ -700,7 +702,7 @@ impl DataStore for Postresql {
         self.flush_workers();
         info!("Entering normal mode: creating all indices");
         self.connection
-            .batch_execute(include_str!("pg_indices_full.sql"))?;
+            .batch_execute(include_str!("pg_mode_normal.sql"))?;
         Ok(())
     }
 

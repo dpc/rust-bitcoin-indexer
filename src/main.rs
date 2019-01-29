@@ -75,7 +75,7 @@ impl Indexer {
             if blocks_to_catch_up <= self.node_starting_chainhead_height / 10 {
                 self.db.mode_normal()?;
             } else {
-                self.db.mode_bulk_restarted()?;
+                self.db.mode_bulk()?;
             }
             let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
             Some((
@@ -86,10 +86,11 @@ impl Indexer {
             ))
         } else {
             // test indices dropping and creation
+            self.db.mode_fresh()?;
             self.db.mode_bulk()?;
-            self.db.mode_bulk_restarted()?;
             self.db.mode_normal()?;
             self.db.mode_bulk()?;
+            self.db.mode_fresh()?;
 
             None
         };
@@ -117,11 +118,8 @@ fn run() -> Result<()> {
     if opts.wipe_db {
         db.wipe()?;
     }
-    if opts.init_db {
-        db.init()?;
-    }
 
-    if !opts.init_db && !opts.wipe_db {
+    if !opts.wipe_db {
         let mut indexer = Indexer::new(rpc_info, db)?;
         indexer.run()?;
     }

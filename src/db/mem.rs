@@ -8,19 +8,15 @@ pub struct MemDataStore {
 }
 
 impl DataStore for MemDataStore {
-    fn init(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn wipe(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn mode_bulk(&mut self) -> Result<()> {
+    fn mode_fresh(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn mode_bulk_restarted(&mut self) -> Result<()> {
+    fn mode_bulk(&mut self) -> Result<()> {
         Ok(())
     }
 

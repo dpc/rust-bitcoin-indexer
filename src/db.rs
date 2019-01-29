@@ -8,18 +8,15 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 pub trait DataStore {
-    /// Initi the db schema etc.
-    fn init(&mut self) -> Result<()>;
-
-    /// Initi the db schema etc.
+    /// Wipe the db
     fn wipe(&mut self) -> Result<()>;
 
     /// Fresh start
-    fn mode_bulk(&mut self) -> Result<()>;
+    fn mode_fresh(&mut self) -> Result<()>;
 
     /// We will be adding a lot stuff
     /// so go fast (eg. drop indices)
-    fn mode_bulk_restarted(&mut self) -> Result<()>;
+    fn mode_bulk(&mut self) -> Result<()>;
 
     /// We're at chain-head
     fn mode_normal(&mut self) -> Result<()>;
