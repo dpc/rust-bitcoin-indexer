@@ -22,6 +22,7 @@ pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 pub type TxHash = Sha256dHash;
 pub type TxHex = String;
+pub type OutPoint = bitcoin::blockdata::transaction::OutPoint;
 
 pub struct BlockInfo {
     pub height: BlockHeight,

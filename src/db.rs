@@ -68,8 +68,7 @@ impl Tx {
 #[derive(Debug, Clone)]
 struct Output {
     pub height: BlockHeight,
-    pub tx_hash: TxHash,
-    pub tx_idx: u32,
+    pub out_point: OutPoint,
     pub value: u64,
     pub address: Option<String>,
     pub coinbase: bool,
@@ -86,8 +85,10 @@ impl Output {
         let network = bitcoin::network::constants::Network::Bitcoin;
         Self {
             height: info.height,
-            tx_hash: tx_id,
-            tx_idx: idx,
+            out_point: OutPoint {
+                txid: tx_id,
+                vout: idx,
+            },
             value: tx_out.value,
             address: address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
             coinbase: tx.is_coin_base(),
@@ -99,8 +100,7 @@ impl Output {
 #[derive(Debug, Clone)]
 struct Input {
     pub height: BlockHeight,
-    pub utxo_tx_hash: TxHash,
-    pub utxo_tx_idx: u32,
+    pub out_point: OutPoint,
 }
 
 impl Input {
@@ -112,8 +112,10 @@ impl Input {
     ) -> Self {
         Input {
             height: info.height,
-            utxo_tx_hash: tx_in.previous_output.txid,
-            utxo_tx_idx: tx_in.previous_output.vout,
+            out_point: OutPoint {
+                txid: tx_in.previous_output.txid,
+                vout: tx_in.previous_output.vout,
+            },
         }
     }
 }

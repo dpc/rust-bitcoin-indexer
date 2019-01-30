@@ -1,6 +1,7 @@
 use log::{debug, error, info, trace};
 
 use super::*;
+use crate::prelude::*;
 use dotenv::dotenv;
 use failure::format_err;
 use postgres::{transaction::Transaction, Connection, TlsMode};
@@ -92,8 +93,8 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
         q.write_fmt(format_args!(
             "({},{},{},{},{},{})",
             output.height,
-            tx_ids[&output.tx_hash],
-            output.tx_idx,
+            tx_ids[&output.out_point.txid],
+            output.out_point.vout,
             output.value,
             output
                 .address
@@ -107,10 +108,7 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
     return vec![q];
 }
 
-fn insert_inputs_query(
-    inputs: &[Input],
-    outputs: &HashMap<UtxoPoint, UtxoSetEntry>,
-) -> Vec<String> {
+fn insert_inputs_query(inputs: &[Input], outputs: &HashMap<OutPoint, UtxoSetEntry>) -> Vec<String> {
     if inputs.is_empty() {
         return vec![];
     }
@@ -129,12 +127,7 @@ fn insert_inputs_query(
         }
         q.write_fmt(format_args!(
             "({},{})",
-            input.height,
-            outputs[&UtxoPoint {
-                tx_hash: input.utxo_tx_hash,
-                tx_idx: input.utxo_tx_idx
-            }]
-                .id,
+            input.height, outputs[&input.out_point].id,
         ))
         .unwrap();
     }
@@ -142,7 +135,7 @@ fn insert_inputs_query(
     vec![q]
 }
 
-fn fetch_outputs_query(outputs: &[UtxoPoint]) -> Vec<String> {
+fn fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
     if outputs.len() > 1500 {
         let mid = outputs.len() / 2;
         let mut p1 = fetch_outputs_query(&outputs[0..mid]);
@@ -157,7 +150,7 @@ fn fetch_outputs_query(outputs: &[UtxoPoint]) -> Vec<String> {
         }
         q.write_fmt(format_args!(
             "('\\x{}'::bytea,{})",
-            output.tx_hash, output.tx_idx
+            output.txid, output.vout
         ))
         .unwrap();
     }
@@ -171,20 +164,14 @@ struct UtxoSetEntry {
     value: u64,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-struct UtxoPoint {
-    tx_hash: TxHash,
-    tx_idx: u32,
-}
-
 #[derive(Default)]
 /// Cache of utxo set
 struct UtxoCacheSet {
-    entries: HashMap<UtxoPoint, UtxoSetEntry>,
+    entries: HashMap<OutPoint, UtxoSetEntry>,
 }
 
 impl UtxoCacheSet {
-    fn insert(&mut self, point: UtxoPoint, id: i64, value: u64) {
+    fn insert(&mut self, point: OutPoint, id: i64, value: u64) {
         self.entries.insert(point, UtxoSetEntry { id, value });
     }
 
@@ -195,8 +182,8 @@ impl UtxoCacheSet {
     /// * Vector of outputs that were missing from the set
     fn consume(
         &mut self,
-        outputs: impl Iterator<Item = UtxoPoint>,
-    ) -> (HashMap<UtxoPoint, UtxoSetEntry>, Vec<UtxoPoint>) {
+        outputs: impl Iterator<Item = OutPoint>,
+    ) -> (HashMap<OutPoint, UtxoSetEntry>, Vec<OutPoint>) {
         let mut found = HashMap::default();
         let mut missing = vec![];
 
@@ -214,8 +201,8 @@ impl UtxoCacheSet {
 
     fn fetch_missing(
         conn: &Connection,
-        missing: Vec<UtxoPoint>,
-    ) -> Result<HashMap<UtxoPoint, UtxoSetEntry>> {
+        missing: Vec<OutPoint>,
+    ) -> Result<HashMap<OutPoint, UtxoSetEntry>> {
         let missing_len = missing.len();
         debug!("Fetching {} missing outputs", missing_len);
         let mut out = HashMap::default();
@@ -234,9 +221,9 @@ impl UtxoCacheSet {
                     BlockHash::from(human_bytes.as_slice())
                 };
                 out.insert(
-                    UtxoPoint {
-                        tx_hash,
-                        tx_idx: row.get::<_, i32>(3) as u32,
+                    OutPoint {
+                        txid: tx_hash,
+                        vout: row.get::<_, i32>(3) as u32,
                     },
                     UtxoSetEntry {
                         id: row.get(0),
@@ -408,14 +395,7 @@ impl Pipeline {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     outputs.iter().enumerate().for_each(|(i, output)| {
                         let id = next_id + (i as i64);
-                        utxo_lock.insert(
-                            UtxoPoint {
-                                tx_hash: output.tx_hash,
-                                tx_idx: output.tx_idx,
-                            },
-                            id,
-                            output.value,
-                        );
+                        utxo_lock.insert(output.out_point, id, output.value);
                     });
                     drop(utxo_lock);
 
@@ -434,10 +414,7 @@ impl Pipeline {
                 while let Ok((batch_id, blocks, inputs)) = inputs_rx.recv() {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
-                        utxo_lock.consume(inputs.iter().map(|i| UtxoPoint {
-                            tx_hash: i.utxo_tx_hash,
-                            tx_idx: i.utxo_tx_idx,
-                        }));
+                        utxo_lock.consume(inputs.iter().map(|i| i.out_point));
                     drop(utxo_lock);
                     let missing = UtxoCacheSet::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
