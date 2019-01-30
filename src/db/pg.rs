@@ -302,6 +302,60 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "blocks", "id")
 }
 
+/// Wipe all records with `> height` from table sorted by id
+///
+/// This is useful for cases, when we don't have an index on `height` (yet).
+///
+/// We can use the fact that both `ids` (primary keys) and `height`
+/// are growing monotonicially, and delete all records with `height`
+/// greather than a given argument without having a index on `height`
+/// itself, by using taking a fixed chunk with highest `id` and deleting
+/// by `height` from it.
+fn wipe_gt_height_from_id_sorted_table(
+    transaction: &Transaction,
+    table: &str,
+    id_col_name: &str,
+    height: BlockHeight,
+) -> Result<()> {
+    debug!("Wiping {} higher than {}H", table, height);
+    let start = Instant::now();
+    let q = format!("DELETE FROM {table} WHERE {id_col} > (SELECT max({id_col}) - 100000 FROM {table}) AND height > $1;",
+                   table = table, id_col = id_col_name);
+
+    let mut total = 0;
+    loop {
+        let deleted = transaction.execute(&q, &[&(height as i64)])?;
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+
+    trace!(
+        "Wiped {} records from {} in {}s",
+        total,
+        table,
+        Instant::now().duration_since(start).as_secs()
+    );
+    Ok(())
+}
+
+fn wipe_txs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
+    wipe_gt_height_from_id_sorted_table(transaction, "txs", "id", height)
+}
+
+fn wipe_inputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
+    wipe_gt_height_from_id_sorted_table(transaction, "inputs", "output_id", height)
+}
+
+fn wipe_outputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
+    wipe_gt_height_from_id_sorted_table(transaction, "outputs", "id", height)
+}
+
+fn wipe_blocks_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
+    wipe_gt_height_from_id_sorted_table(transaction, "blocks", "id", height)
+}
+
 type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
 
 /// Worker Pipepline
@@ -622,54 +676,6 @@ impl Postresql {
         Ok(())
     }
 
-    /// Wipe all records with `> height` from table sorted by id
-    ///
-    /// We can use the fact that both `ids` (primary keys) and `height`
-    /// are growing monotonicially, and delete all records with `height`
-    /// greather than a given argument without having a index on `height`
-    /// itself, by using taking a fixed chunk with highest `id` and deleting
-    /// by `height` from it.
-    fn wipe_gt_height_from_id_sorted_table(
-        &mut self,
-        table: &str,
-        id_col_name: &str,
-        height: BlockHeight,
-    ) -> Result<()> {
-        debug!("Wiping {} higher than {}H", table, height);
-        let start = Instant::now();
-        let q = format!("DELETE FROM {table} WHERE {id_col} > (SELECT max({id_col}) - 100000 FROM {table}) AND height > $1;",
-                       table = table, id_col = id_col_name);
-
-        let mut total = 0;
-        loop {
-            let deleted = self.connection.execute(&q, &[&(height as i64)])?;
-            total += deleted;
-            if deleted == 0 {
-                break;
-            }
-        }
-
-        trace!(
-            "Wiped {} records from {} in {}s",
-            total,
-            table,
-            Instant::now().duration_since(start).as_secs()
-        );
-        Ok(())
-    }
-
-    fn wipe_txs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
-        self.wipe_gt_height_from_id_sorted_table("txs", "id", height)
-    }
-
-    fn wipe_inputs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
-        self.wipe_gt_height_from_id_sorted_table("inputs", "output_id", height)
-    }
-
-    fn wipe_outputs_higher_than_height(&mut self, height: BlockHeight) -> Result<()> {
-        self.wipe_gt_height_from_id_sorted_table("outputs", "id", height)
-    }
-
     /// Wipe all the data that might have been added, before a `block` entry
     /// was commited to the DB.
     ///
@@ -677,9 +683,7 @@ impl Postresql {
     /// used as a commitment that everything else was inserted already..
     fn wipe_inconsistent_data(&mut self) -> Result<()> {
         if let Some(height) = self.get_max_height()? {
-            self.wipe_txs_higher_than_height(height)?;
-            self.wipe_outputs_higher_than_height(height)?;
-            self.wipe_inputs_higher_than_height(height)?;
+            self.wipe_to_height(height)?;
         }
 
         Ok(())
@@ -840,24 +844,24 @@ impl DataStore for Postresql {
             }))
     }
 
+    // TODO: rename `wipe_at_height`?
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
         info!("Reorg detected at {}H", height);
         // If we're doing reorgs, that means we have to be close to chainhead
         // this will also flush the batch and workers
         self.mode_normal();
 
+        let transaction = self.connection.transaction()?;
         // Always start with removing `blocks` since that invalidates
         // all other data in case of crash
-        self.connection
-            .execute("REMOVE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
-        self.connection
-            .execute("REMOVE FROM txs WHERE height >= $1", &[&(height as i64)])?;
-        self.connection
-            .execute("REMOVE FROM inputs WHERE height >= $1", &[&(height as i64)])?;
-        self.connection.execute(
-            "REMOVE FROM outputs WHERE height >= $1",
+        transaction.execute("DELETE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
+        transaction.execute("DELETE FROM txs WHERE height >= $1", &[&(height as i64)])?;
+        transaction.execute("DELETE FROM inputs WHERE height >= $1", &[&(height as i64)])?;
+        transaction.execute(
+            "DELETE FROM outputs WHERE height >= $1",
             &[&(height as i64)],
         )?;
+        transaction.commit()?;
 
         self.cached_max_height = None;
         Ok(())
@@ -876,6 +880,16 @@ impl DataStore for Postresql {
 
     fn flush(&mut self) -> Result<()> {
         self.flush_batch();
+        Ok(())
+    }
+
+    fn wipe_to_height(&mut self, height: u64) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        wipe_txs_higher_than_height(&transaction, height)?;
+        wipe_outputs_higher_than_height(&transaction, height)?;
+        wipe_inputs_higher_than_height(&transaction, height)?;
+        wipe_blocks_higher_than_height(&transaction, height)?;
+        transaction.commit()?;
         Ok(())
     }
 }

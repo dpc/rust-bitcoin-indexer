@@ -21,6 +21,8 @@ pub trait DataStore {
     /// We're at chain-head
     fn mode_normal(&mut self) -> Result<()>;
 
+    fn wipe_to_height(&mut self, height: u64) -> Result<()>;
+
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
     fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;

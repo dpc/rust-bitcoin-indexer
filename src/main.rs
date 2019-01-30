@@ -117,9 +117,9 @@ fn run() -> Result<()> {
 
     if opts.wipe_db {
         db.wipe()?;
-    }
-
-    if !opts.wipe_db {
+    } else if let Some(height) = opts.wipe_to_height {
+        db.wipe_to_height(height)?;
+    } else {
         let mut indexer = Indexer::new(rpc_info, db)?;
         indexer.run()?;
     }

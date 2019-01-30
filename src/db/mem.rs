@@ -24,6 +24,10 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
+    fn wipe_to_height(&mut self, height: u64) -> Result<()> {
+        Ok(())
+    }
+
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
         Ok(self.block_hashes.get(&height).cloned())
     }

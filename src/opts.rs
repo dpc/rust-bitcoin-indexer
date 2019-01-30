@@ -10,6 +10,9 @@ pub struct Opts {
     #[structopt(long = "rpc-pass")]
     pub node_rpc_pass: Option<String>,
 
-    #[structopt(long = "wipe-db")]
+    #[structopt(long = "wipe-whole-db")]
     pub wipe_db: bool,
+
+    #[structopt(long = "wipe-to-height")]
+    pub wipe_to_height: Option<u64>,
 }

@@ -115,7 +115,7 @@ in a directory containing the `.env` file.
 
 #### More options
 
-You can use `--wipe-db` to wipe the db.
+You can use `--wipe-to-height` to wipe history at a point, or `--wipe-whole-db` to wipe the db.
 
 For logging set env. var. `RUST_LOG` to `rust_bitcoin_indexer` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
 **Warning**: Do not turn on logging in production! It's very slow: https://github.com/sebasmagri/env_logger/issues/123 .
