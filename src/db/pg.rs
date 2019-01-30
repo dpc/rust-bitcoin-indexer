@@ -343,9 +343,13 @@ fn wipe_gt_height_from_id_sorted_table(
 fn wipe_txs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
     wipe_gt_height_from_id_sorted_table(transaction, "txs", "id", height)
 }
-
 fn wipe_inputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
-    wipe_gt_height_from_id_sorted_table(transaction, "inputs", "output_id", height)
+    // `input` table is special - as it does not have it's own `id` column; it's generally
+    // unnecessary, as `output_id` is unique; however it does not grow with height, so can't
+    // be reliably used with `wipe_gt_height_from_id_sorted_table`; therefore, we just maintain
+    // the `height` index if bulk load was restarted;
+    transaction.execute("DELETE FROM inputs WHERE height > $1;", &[&(height as i64)])?;
+    Ok(())
 }
 
 fn wipe_outputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
@@ -443,8 +447,6 @@ impl Pipeline {
             fn_log_err("db_worker_txs", move || {
                 let mut next_id = read_next_tx_id(&conn)?;
                 while let Ok((batch_id, parsed)) = txs_rx.recv() {
-                    assert_eq!(next_id, read_next_tx_id(&conn)?);
-
                     let mut blocks: Vec<super::Block> = vec![];
                     let mut txs: Vec<super::Tx> = vec![];
                     let mut outputs: Vec<super::Output> = vec![];
@@ -462,6 +464,7 @@ impl Pipeline {
                     if mode.is_atomic() {
                         pending_queries.push(queries);
                     } else {
+                        assert_eq!(next_id, read_next_tx_id(&conn)?);
                         execute_bulk_insert_transcation(
                             &conn,
                             "txs",
@@ -494,13 +497,12 @@ impl Pipeline {
                 while let Ok((batch_id, blocks, outputs, inputs, tx_ids, mut pending_queries)) =
                     outputs_rx.recv()
                 {
-                    assert_eq!(next_id, read_next_output_id(&conn)?);
-
                     let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
 
                     if mode.is_atomic() {
                         pending_queries.push(queries);
                     } else {
+                        assert_eq!(next_id, read_next_output_id(&conn)?);
                         execute_bulk_insert_transcation(
                             &conn,
                             "outputs",
@@ -767,7 +769,11 @@ impl DataStore for Postresql {
 
     fn mode_bulk(&mut self) -> Result<()> {
         info!("Entering bulk mode: minimum indices");
-        self.bulk_mode = true;
+        if !self.bulk_mode {
+            self.bulk_mode = true;
+            self.flush_batch();
+            self.flush_workers();
+        }
         self.connection
             .batch_execute(include_str!("pg_mode_bulk.sql"))?;
         Ok(())
@@ -775,16 +781,22 @@ impl DataStore for Postresql {
 
     fn mode_fresh(&mut self) -> Result<()> {
         info!("Entering fresh mode: dropping all indices");
-        self.bulk_mode = true;
+        if !self.bulk_mode {
+            self.bulk_mode = true;
+            self.flush_batch();
+            self.flush_workers();
+        }
         self.connection
             .batch_execute(include_str!("pg_mode_fresh.sql"))?;
         Ok(())
     }
 
     fn mode_normal(&mut self) -> Result<()> {
-        self.bulk_mode = false;
-        self.flush_batch();
-        self.flush_workers();
+        if self.bulk_mode {
+            self.bulk_mode = false;
+            self.flush_batch();
+            self.flush_workers();
+        }
         info!("Entering normal mode: creating all indices");
         self.connection
             .batch_execute(include_str!("pg_mode_normal.sql"))?;
