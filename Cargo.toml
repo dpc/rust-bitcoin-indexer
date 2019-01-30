@@ -9,13 +9,13 @@ harness = false
 name = "bitcoincore_rpc"
 
 [dependencies]
-bitcoin = "0.15"
+bitcoin = "0.16"
 bitcoin-bech32 = "*"
-bitcoincore-rpc = "0.1"
+bitcoincore-rpc = "0.1.1"
 common_failures = "*"
 failure = "*"
 hex = "*"
-secp256k1 = "*"
+secp256k1 = "0.12.2"
 crossbeam-channel = "*"
 structopt = "*"
 default = "*"
