@@ -266,6 +266,30 @@ fn read_next_id(conn: &Connection, table_name: &str, id_col_name: &str) -> Resul
         .unwrap_or(PG_STARTING_ID))
 }
 
+fn execute_bulk_insert_transcation(
+    conn: &Connection,
+    name: &str,
+    len: usize,
+    batch_id: u64,
+    queries: impl Iterator<Item = String>,
+) -> Result<()> {
+    trace!("Inserting {} {} from batch {}...", len, name, batch_id);
+    let start = Instant::now();
+    let transaction = conn.transaction()?;
+    for s in queries {
+        transaction.batch_execute(&s)?;
+    }
+    transaction.commit()?;
+    trace!(
+        "Inserted {} {} from batch {} in {}s",
+        len,
+        name,
+        batch_id,
+        Instant::now().duration_since(start).as_secs()
+    );
+    Ok(())
+}
+
 fn read_next_tx_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "txs", "id")
 }
@@ -344,19 +368,14 @@ impl Pipeline {
                         inputs.append(&mut parsed.inputs);
                     }
 
-                    trace!("Inserting {} txs from batch {}...", txs.len(), batch_id);
-                    let start = Instant::now();
-                    let transaction = conn.transaction()?;
-                    for s in create_bulk_insert_txs_query(&txs) {
-                        transaction.batch_execute(&s)?;
-                    }
-                    transaction.commit()?;
-                    trace!(
-                        "Inserted {} txs from batch {} in {}s",
+                    let queries = create_bulk_insert_txs_query(&txs);
+                    execute_bulk_insert_transcation(
+                        &conn,
+                        "txs",
                         txs.len(),
                         batch_id,
-                        Instant::now().duration_since(start).as_secs()
-                    );
+                        queries.into_iter(),
+                    )?;
 
                     let batch_len = txs.len();
                     let tx_ids: HashMap<_, _> = txs
@@ -381,23 +400,14 @@ impl Pipeline {
                 while let Ok((batch_id, blocks, outputs, inputs, tx_ids)) = outputs_rx.recv() {
                     assert_eq!(next_id, read_next_output_id(&conn)?);
 
-                    trace!(
-                        "Inserting {} outputs from batch {}...",
-                        outputs.len(),
-                        batch_id
-                    );
-                    let start = Instant::now();
-                    let transaction = conn.transaction()?;
-                    for s in create_bulk_insert_outputs_query(&outputs, &tx_ids) {
-                        transaction.batch_execute(&s)?;
-                    }
-                    transaction.commit()?;
-                    trace!(
-                        "Inserted {} outputs from batch {} in {}s",
+                    let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
+                    execute_bulk_insert_transcation(
+                        &conn,
+                        "outputs",
                         outputs.len(),
                         batch_id,
-                        Instant::now().duration_since(start).as_secs()
-                    );
+                        queries.into_iter(),
+                    )?;
 
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     outputs.iter().enumerate().for_each(|(i, output)| {
@@ -428,23 +438,14 @@ impl Pipeline {
                         output_ids.insert(k, v);
                     }
 
-                    trace!(
-                        "Inserting {} inputs from batch {}...",
-                        inputs.len(),
-                        batch_id
-                    );
-                    let start = Instant::now();
-                    let transaction = conn.transaction()?;
-                    for s in create_bulk_insert_inputs_query(&inputs, &output_ids) {
-                        transaction.batch_execute(&s)?;
-                    }
-                    transaction.commit()?;
-                    trace!(
-                        "Inserted {} inputs from batch {} in {}s",
+                    let queries = create_bulk_insert_inputs_query(&inputs, &output_ids);
+                    execute_bulk_insert_transcation(
+                        &conn,
+                        "inputs",
                         inputs.len(),
                         batch_id,
-                        Instant::now().duration_since(start).as_secs()
-                    );
+                        queries.into_iter(),
+                    )?;
 
                     inputs_tx.send((batch_id, blocks))?;
                 }
@@ -457,21 +458,14 @@ impl Pipeline {
             let in_flight = in_flight.clone();
             fn_log_err("db_worker_blocks", move || {
                 while let Ok((batch_id, blocks)) = blocks_rx.recv() {
-                    trace!(
-                        "Inserting {} blocks from batch {}...",
-                        blocks.len(),
-                        batch_id
-                    );
-                    let start = Instant::now();
-                    for s in create_bulk_insert_blocks_query(&blocks) {
-                        conn.batch_execute(&s)?;
-                    }
-                    trace!(
-                        "Inserted {} blocks from batch {} in {}s",
+                    let queries = create_bulk_insert_blocks_query(&blocks);
+                    execute_bulk_insert_transcation(
+                        &conn,
+                        "blocks",
                         blocks.len(),
                         batch_id,
-                        Instant::now().duration_since(start).as_secs()
-                    );
+                        queries.into_iter(),
+                    )?;
                     info!(
                         "Block {}H fully indexed and commited",
                         blocks
