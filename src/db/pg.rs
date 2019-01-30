@@ -166,11 +166,11 @@ struct UtxoSetEntry {
 
 #[derive(Default)]
 /// Cache of utxo set
-struct UtxoCacheSet {
+struct UtxoSetCache {
     entries: HashMap<OutPoint, UtxoSetEntry>,
 }
 
-impl UtxoCacheSet {
+impl UtxoSetCache {
     fn insert(&mut self, point: OutPoint, id: i64, value: u64) {
         self.entries.insert(point, UtxoSetEntry { id, value });
     }
@@ -316,7 +316,7 @@ impl Pipeline {
         let (outputs_tx, inputs_rx) =
             crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>)>(0);
         let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Block>)>(0);
-        let utxo_set_cache = Arc::new(Mutex::new(UtxoCacheSet::default()));
+        let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
@@ -416,7 +416,7 @@ impl Pipeline {
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
                     drop(utxo_lock);
-                    let missing = UtxoCacheSet::fetch_missing(&conn, missing)?;
+                    let missing = UtxoSetCache::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
                         output_ids.insert(k, v);
                     }
