@@ -514,7 +514,6 @@ impl Drop for Pipeline {
 }
 
 pub struct Postresql {
-    // TODO: pool
     connection: Connection,
     cached_max_height: Option<u64>,
     pipeline: Option<Pipeline>,
