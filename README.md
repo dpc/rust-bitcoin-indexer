@@ -119,3 +119,25 @@ You can use `--wipe-db` to wipe the db.
 
 For logging set env. var. `RUST_LOG` to `rust_bitcoin_indexer` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
 **Warning**: Do not turn on logging in production! It's very slow: https://github.com/sebasmagri/env_logger/issues/123 .
+
+
+### Some useful stuff that can be done already
+
+Check current balance of an address:
+
+```
+bitcoin-indexer=> select * from address_balances where address = '14zV5ZCqYmgyCzoVEhRVsP7SpUDVsCBz5g';                                                                                                                                          
+              address               |   value
+------------------------------------+------------
+ 14zV5ZCqYmgyCzoVEhRVsP7SpUDVsCBz5g | 6138945213
+```
+
+Check balances at a given height:
+
+```
+bitcoin-indexer=> select * from address_balances_at_height WHERE address IN ('14zV5ZCqYmgyCzoVEhRVsP7SpUDVsCBz5g', '344tcgkKA97LpgzGtAprtqnNRDfo4VQQWT') AND height = 559834;
+              address               | height |   value   
+------------------------------------+--------+-----------
+ 14zV5ZCqYmgyCzoVEhRVsP7SpUDVsCBz5g | 559834 | 162209091
+ 344tcgkKA97LpgzGtAprtqnNRDfo4VQQWT | 559834 |         0
+```
