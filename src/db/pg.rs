@@ -305,6 +305,26 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
 type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
 
 /// Worker Pipepline
+///
+/// `Pipeline` is reponsible for actually inserting data into the db.
+///  It is split between multiple threads - each handling one table.
+///  The idea here is to have some level of paralelism to help saturate
+///  network IO, and then disk IO. As each thread touches only one
+///  table - there is no contention between them.
+///
+///  `Pipeline` name comes from the fact that each thread does its job
+///  and passes rest of the data to the next one.
+///
+///  A lot of stuff here about performance is actually speculative,
+///  but there is only so many hours in a day, and it seems to work well
+///  in practice.
+///
+///  In as `atomic` mode, last thread inserts entire data in one transaction
+///  to prevent temporary inconsistency (eg. txs inserted, but blocks not yet).
+///  It is to be used in non-bulk mode, when blocks are indexed one at the time,
+///  so performance is not important. Passing formatted queries around is a compromise
+///  between having two different versions of this logic, and good performance
+///  in bulk mode.
 struct Pipeline {
     in_flight: Arc<Mutex<BlocksInFlight>>,
     tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
@@ -329,8 +349,20 @@ where
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum PipelineMode {
+    Atomic,
+    Bulk,
+}
+
+impl PipelineMode {
+    fn is_atomic(self) -> bool {
+        self == PipelineMode::Atomic
+    }
+}
+
 impl Pipeline {
-    fn new(in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
+    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: PipelineMode) -> Result<Self> {
         /// We use only rendezvous (0-size) channels, to allow passing
         /// work and parallelism, but without doing any buffering of
         /// work in the channels. Buffered work does not
@@ -343,10 +375,13 @@ impl Pipeline {
             Vec<Output>,
             Vec<Input>,
             HashMap<TxHash, i64>,
+            Vec<Vec<String>>,
         )>(0);
         let (outputs_tx, inputs_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>)>(0);
-        let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Block>)>(0);
+            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>, Vec<Vec<String>>)>(0);
+
+        let (inputs_tx, blocks_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Vec<String>>)>(0);
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
         let txs_thread = std::thread::spawn({
@@ -360,6 +395,7 @@ impl Pipeline {
                     let mut txs: Vec<super::Tx> = vec![];
                     let mut outputs: Vec<super::Output> = vec![];
                     let mut inputs: Vec<super::Input> = vec![];
+                    let mut pending_queries = vec![];
 
                     for mut parsed in parsed {
                         blocks.push(parsed.block);
@@ -369,13 +405,17 @@ impl Pipeline {
                     }
 
                     let queries = create_bulk_insert_txs_query(&txs);
-                    execute_bulk_insert_transcation(
-                        &conn,
-                        "txs",
-                        txs.len(),
-                        batch_id,
-                        queries.into_iter(),
-                    )?;
+                    if mode.is_atomic() {
+                        pending_queries.push(queries);
+                    } else {
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "txs",
+                            txs.len(),
+                            batch_id,
+                            queries.into_iter(),
+                        )?
+                    };
 
                     let batch_len = txs.len();
                     let tx_ids: HashMap<_, _> = txs
@@ -386,7 +426,7 @@ impl Pipeline {
 
                     next_id += batch_len as i64;
 
-                    txs_tx.send((batch_id, blocks, outputs, inputs, tx_ids))?;
+                    txs_tx.send((batch_id, blocks, outputs, inputs, tx_ids, pending_queries))?;
                 }
                 Ok(())
             })
@@ -397,17 +437,24 @@ impl Pipeline {
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_outputs", move || {
                 let mut next_id = read_next_output_id(&conn)?;
-                while let Ok((batch_id, blocks, outputs, inputs, tx_ids)) = outputs_rx.recv() {
+                while let Ok((batch_id, blocks, outputs, inputs, tx_ids, mut pending_queries)) =
+                    outputs_rx.recv()
+                {
                     assert_eq!(next_id, read_next_output_id(&conn)?);
 
                     let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
-                    execute_bulk_insert_transcation(
-                        &conn,
-                        "outputs",
-                        outputs.len(),
-                        batch_id,
-                        queries.into_iter(),
-                    )?;
+
+                    if mode.is_atomic() {
+                        pending_queries.push(queries);
+                    } else {
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "outputs",
+                            outputs.len(),
+                            batch_id,
+                            queries.into_iter(),
+                        )?;
+                    }
 
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     outputs.iter().enumerate().for_each(|(i, output)| {
@@ -418,7 +465,7 @@ impl Pipeline {
 
                     next_id += outputs.len() as i64;
 
-                    outputs_tx.send((batch_id, blocks, inputs))?;
+                    outputs_tx.send((batch_id, blocks, inputs, pending_queries))?;
                 }
                 Ok(())
             })
@@ -428,7 +475,7 @@ impl Pipeline {
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_inputs", move || {
-                while let Ok((batch_id, blocks, inputs)) = inputs_rx.recv() {
+                while let Ok((batch_id, blocks, inputs, mut pending_queries)) = inputs_rx.recv() {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
@@ -439,15 +486,19 @@ impl Pipeline {
                     }
 
                     let queries = create_bulk_insert_inputs_query(&inputs, &output_ids);
-                    execute_bulk_insert_transcation(
-                        &conn,
-                        "inputs",
-                        inputs.len(),
-                        batch_id,
-                        queries.into_iter(),
-                    )?;
+                    if mode.is_atomic() {
+                        pending_queries.push(queries);
+                    } else {
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "inputs",
+                            inputs.len(),
+                            batch_id,
+                            queries.into_iter(),
+                        )?;
+                    }
 
-                    inputs_tx.send((batch_id, blocks))?;
+                    inputs_tx.send((batch_id, blocks, pending_queries))?;
                 }
                 Ok(())
             })
@@ -457,15 +508,28 @@ impl Pipeline {
             let conn = establish_connection()?;
             let in_flight = in_flight.clone();
             fn_log_err("db_worker_blocks", move || {
-                while let Ok((batch_id, blocks)) = blocks_rx.recv() {
+                while let Ok((batch_id, blocks, mut pending_queries)) = blocks_rx.recv() {
                     let queries = create_bulk_insert_blocks_query(&blocks);
-                    execute_bulk_insert_transcation(
-                        &conn,
-                        "blocks",
-                        blocks.len(),
-                        batch_id,
-                        queries.into_iter(),
-                    )?;
+
+                    if mode.is_atomic() {
+                        pending_queries.push(queries);
+
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "all block data",
+                            blocks.len(),
+                            batch_id,
+                            pending_queries.into_iter().flatten(),
+                        )?;
+                    } else {
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "blocks",
+                            blocks.len(),
+                            batch_id,
+                            queries.into_iter(),
+                        )?;
+                    }
                     info!(
                         "Block {}H fully indexed and commited",
                         blocks
@@ -521,6 +585,7 @@ pub struct Postresql {
     batch: Vec<BlockInfo>,
     batch_txs_total: u64,
     batch_id: u64,
+    bulk_mode: bool,
 
     in_flight: Arc<Mutex<BlocksInFlight>>,
 }
@@ -541,6 +606,7 @@ impl Postresql {
             batch: vec![],
             batch_txs_total: 0,
             batch_id: 0,
+            bulk_mode: true,
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
         };
         s.init()?;
@@ -628,7 +694,17 @@ impl Postresql {
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(Pipeline::new(self.in_flight.clone()).unwrap())
+        self.pipeline = Some(
+            Pipeline::new(
+                self.in_flight.clone(),
+                if self.bulk_mode {
+                    PipelineMode::Bulk
+                } else {
+                    PipelineMode::Atomic
+                },
+            )
+            .unwrap(),
+        )
     }
 
     fn flush_workers(&mut self) {
@@ -687,6 +763,7 @@ impl DataStore for Postresql {
 
     fn mode_bulk(&mut self) -> Result<()> {
         info!("Entering bulk mode: minimum indices");
+        self.bulk_mode = true;
         self.connection
             .batch_execute(include_str!("pg_mode_bulk.sql"))?;
         Ok(())
@@ -694,12 +771,14 @@ impl DataStore for Postresql {
 
     fn mode_fresh(&mut self) -> Result<()> {
         info!("Entering fresh mode: dropping all indices");
+        self.bulk_mode = true;
         self.connection
             .batch_execute(include_str!("pg_mode_fresh.sql"))?;
         Ok(())
     }
 
     fn mode_normal(&mut self) -> Result<()> {
+        self.bulk_mode = false;
         self.flush_batch();
         self.flush_workers();
         info!("Entering normal mode: creating all indices");
