@@ -109,7 +109,7 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
 
 fn insert_inputs_query(
     inputs: &[Input],
-    outputs: &HashMap<(TxHash, u32), UtxoSetEntry>,
+    outputs: &HashMap<UtxoPoint, UtxoSetEntry>,
 ) -> Vec<String> {
     if inputs.is_empty() {
         return vec![];
@@ -130,7 +130,11 @@ fn insert_inputs_query(
         q.write_fmt(format_args!(
             "({},{})",
             input.height,
-            outputs[&(input.utxo_tx_hash, input.utxo_tx_idx)].id,
+            outputs[&UtxoPoint {
+                tx_hash: input.utxo_tx_hash,
+                tx_idx: input.utxo_tx_idx
+            }]
+                .id,
         ))
         .unwrap();
     }
@@ -138,7 +142,7 @@ fn insert_inputs_query(
     vec![q]
 }
 
-fn fetch_outputs_query(outputs: &[(TxHash, u32)]) -> Vec<String> {
+fn fetch_outputs_query(outputs: &[UtxoPoint]) -> Vec<String> {
     if outputs.len() > 1500 {
         let mid = outputs.len() / 2;
         let mut p1 = fetch_outputs_query(&outputs[0..mid]);
@@ -151,29 +155,37 @@ fn fetch_outputs_query(outputs: &[(TxHash, u32)]) -> Vec<String> {
         if i > 0 {
             q.push_str(",")
         }
-        q.write_fmt(format_args!("('\\x{}'::bytea,{})", output.0, output.1))
-            .unwrap();
+        q.write_fmt(format_args!(
+            "('\\x{}'::bytea,{})",
+            output.tx_hash, output.tx_idx
+        ))
+        .unwrap();
     }
     q.write_str(" );");
     vec![q]
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct UtxoSetEntry {
     id: i64,
     value: u64,
 }
 
-#[derive(Default)]
-/// Cache of utxo set
-/// TODO: Rename to `UtxoSetCache`
-struct UtxoSet {
-    entries: HashMap<(TxHash, u32), UtxoSetEntry>,
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+struct UtxoPoint {
+    tx_hash: TxHash,
+    tx_idx: u32,
 }
 
-impl UtxoSet {
-    fn insert(&mut self, tx_hash: TxHash, tx_idx: u32, id: i64, value: u64) {
-        self.entries
-            .insert((tx_hash, tx_idx), UtxoSetEntry { id, value });
+#[derive(Default)]
+/// Cache of utxo set
+struct UtxoCacheSet {
+    entries: HashMap<UtxoPoint, UtxoSetEntry>,
+}
+
+impl UtxoCacheSet {
+    fn insert(&mut self, point: UtxoPoint, id: i64, value: u64) {
+        self.entries.insert(point, UtxoSetEntry { id, value });
     }
 
     /// Consume `outputs`
@@ -183,8 +195,8 @@ impl UtxoSet {
     /// * Vector of outputs that were missing from the set
     fn consume(
         &mut self,
-        outputs: impl Iterator<Item = (TxHash, u32)>,
-    ) -> (HashMap<(TxHash, u32), UtxoSetEntry>, Vec<(TxHash, u32)>) {
+        outputs: impl Iterator<Item = UtxoPoint>,
+    ) -> (HashMap<UtxoPoint, UtxoSetEntry>, Vec<UtxoPoint>) {
         let mut found = HashMap::default();
         let mut missing = vec![];
 
@@ -202,8 +214,8 @@ impl UtxoSet {
 
     fn fetch_missing(
         conn: &Connection,
-        missing: Vec<(TxHash, u32)>,
-    ) -> Result<HashMap<(TxHash, u32), UtxoSetEntry>> {
+        missing: Vec<UtxoPoint>,
+    ) -> Result<HashMap<UtxoPoint, UtxoSetEntry>> {
         let missing_len = missing.len();
         debug!("Fetching {} missing outputs", missing_len);
         let mut out = HashMap::default();
@@ -216,13 +228,16 @@ impl UtxoSet {
         let missing: Vec<_> = missing.into_iter().collect();
         for q in fetch_outputs_query(&missing) {
             for row in &conn.query(&q, &[])? {
-                let hash = {
+                let tx_hash = {
                     let mut human_bytes = row.get::<_, Vec<u8>>(2);
                     human_bytes.reverse();
                     BlockHash::from(human_bytes.as_slice())
                 };
                 out.insert(
-                    (hash, row.get::<_, i32>(3) as u32),
+                    UtxoPoint {
+                        tx_hash,
+                        tx_idx: row.get::<_, i32>(3) as u32,
+                    },
                     UtxoSetEntry {
                         id: row.get(0),
                         value: row.get::<_, i64>(1) as u64,
@@ -314,7 +329,7 @@ impl Pipeline {
         let (outputs_tx, inputs_rx) =
             crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>)>(0);
         let (inputs_tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Block>)>(0);
-        let utxo_set_cache = Arc::new(Mutex::new(UtxoSet::default()));
+        let utxo_set_cache = Arc::new(Mutex::new(UtxoCacheSet::default()));
 
         let txs_thread = std::thread::spawn({
             let conn = establish_connection()?;
@@ -393,7 +408,14 @@ impl Pipeline {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     outputs.iter().enumerate().for_each(|(i, output)| {
                         let id = next_id + (i as i64);
-                        utxo_lock.insert(output.tx_hash, output.tx_idx, id, output.value);
+                        utxo_lock.insert(
+                            UtxoPoint {
+                                tx_hash: output.tx_hash,
+                                tx_idx: output.tx_idx,
+                            },
+                            id,
+                            output.value,
+                        );
                     });
                     drop(utxo_lock);
 
@@ -412,9 +434,12 @@ impl Pipeline {
                 while let Ok((batch_id, blocks, inputs)) = inputs_rx.recv() {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
-                        utxo_lock.consume(inputs.iter().map(|i| (i.utxo_tx_hash, i.utxo_tx_idx)));
+                        utxo_lock.consume(inputs.iter().map(|i| UtxoPoint {
+                            tx_hash: i.utxo_tx_hash,
+                            tx_idx: i.utxo_tx_idx,
+                        }));
                     drop(utxo_lock);
-                    let missing = UtxoSet::fetch_missing(&conn, missing)?;
+                    let missing = UtxoCacheSet::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
                         output_ids.insert(k, v);
                     }
