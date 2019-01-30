@@ -12,20 +12,20 @@ use std::time::Instant;
 use std::{env, fmt::Write, str::FromStr};
 
 pub fn establish_connection() -> Result<Connection> {
-    dotenv().ok();
+    dotenv()?;
 
     let database_url = env::var("DATABASE_URL")?;
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
-fn insert_blocks_query(blocks: &[Block]) -> Vec<String> {
+fn create_bulk_insert_blocks_query(blocks: &[Block]) -> Vec<String> {
     if blocks.is_empty() {
         return vec![];
     }
     if blocks.len() > 9000 {
         let mid = blocks.len() / 2;
-        let mut p1 = insert_blocks_query(&blocks[0..mid]);
-        let mut p2 = insert_blocks_query(&blocks[mid..blocks.len()]);
+        let mut p1 = create_bulk_insert_blocks_query(&blocks[0..mid]);
+        let mut p2 = create_bulk_insert_blocks_query(&blocks[mid..blocks.len()]);
         p1.append(&mut p2);
         return p1;
     }
@@ -45,14 +45,14 @@ fn insert_blocks_query(blocks: &[Block]) -> Vec<String> {
     return vec![q];
 }
 
-fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
+fn create_bulk_insert_txs_query(txs: &[Tx]) -> Vec<String> {
     if txs.is_empty() {
         return vec![];
     }
     if txs.len() > 9000 {
         let mid = txs.len() / 2;
-        let mut p1 = insert_txs_query(&txs[0..mid]);
-        let mut p2 = insert_txs_query(&txs[mid..txs.len()]);
+        let mut p1 = create_bulk_insert_txs_query(&txs[0..mid]);
+        let mut p2 = create_bulk_insert_txs_query(&txs[mid..txs.len()]);
         p1.append(&mut p2);
         return p1;
     }
@@ -72,14 +72,17 @@ fn insert_txs_query(txs: &[Tx]) -> Vec<String> {
     return vec![q];
 }
 
-fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Vec<String> {
+fn create_bulk_insert_outputs_query(
+    outputs: &[Output],
+    tx_ids: &HashMap<TxHash, i64>,
+) -> Vec<String> {
     if outputs.is_empty() {
         return vec![];
     }
     if outputs.len() > 9000 {
         let mid = outputs.len() / 2;
-        let mut p1 = insert_outputs_query(&outputs[0..mid], tx_ids);
-        let mut p2 = insert_outputs_query(&outputs[mid..outputs.len()], tx_ids);
+        let mut p1 = create_bulk_insert_outputs_query(&outputs[0..mid], tx_ids);
+        let mut p2 = create_bulk_insert_outputs_query(&outputs[mid..outputs.len()], tx_ids);
         p1.append(&mut p2);
         return p1;
     }
@@ -108,14 +111,17 @@ fn insert_outputs_query(outputs: &[Output], tx_ids: &HashMap<TxHash, i64>) -> Ve
     return vec![q];
 }
 
-fn insert_inputs_query(inputs: &[Input], outputs: &HashMap<OutPoint, UtxoSetEntry>) -> Vec<String> {
+fn create_bulk_insert_inputs_query(
+    inputs: &[Input],
+    outputs: &HashMap<OutPoint, UtxoSetEntry>,
+) -> Vec<String> {
     if inputs.is_empty() {
         return vec![];
     }
     if inputs.len() > 9000 {
         let mid = inputs.len() / 2;
-        let mut p1 = insert_inputs_query(&inputs[0..mid], outputs);
-        let mut p2 = insert_inputs_query(&inputs[mid..inputs.len()], outputs);
+        let mut p1 = create_bulk_insert_inputs_query(&inputs[0..mid], outputs);
+        let mut p2 = create_bulk_insert_inputs_query(&inputs[mid..inputs.len()], outputs);
         p1.append(&mut p2);
         return p1;
     }
@@ -135,11 +141,11 @@ fn insert_inputs_query(inputs: &[Input], outputs: &HashMap<OutPoint, UtxoSetEntr
     vec![q]
 }
 
-fn fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
+fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
     if outputs.len() > 1500 {
         let mid = outputs.len() / 2;
-        let mut p1 = fetch_outputs_query(&outputs[0..mid]);
-        let mut p2 = fetch_outputs_query(&outputs[mid..outputs.len()]);
+        let mut p1 = crate_fetch_outputs_query(&outputs[0..mid]);
+        let mut p2 = crate_fetch_outputs_query(&outputs[mid..outputs.len()]);
         p1.append(&mut p2);
         return p1;
     }
@@ -213,7 +219,7 @@ impl UtxoSetCache {
 
         let start = Instant::now();
         let missing: Vec<_> = missing.into_iter().collect();
-        for q in fetch_outputs_query(&missing) {
+        for q in crate_fetch_outputs_query(&missing) {
             for row in &conn.query(&q, &[])? {
                 let tx_hash = {
                     let mut human_bytes = row.get::<_, Vec<u8>>(2);
@@ -273,6 +279,7 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
 }
 
 type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
+
 /// Worker Pipepline
 struct Pipeline {
     in_flight: Arc<Mutex<BlocksInFlight>>,
@@ -340,7 +347,7 @@ impl Pipeline {
                     trace!("Inserting {} txs from batch {}...", txs.len(), batch_id);
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
-                    for s in insert_txs_query(&txs) {
+                    for s in create_bulk_insert_txs_query(&txs) {
                         transaction.batch_execute(&s)?;
                     }
                     transaction.commit()?;
@@ -381,7 +388,7 @@ impl Pipeline {
                     );
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
-                    for s in insert_outputs_query(&outputs, &tx_ids) {
+                    for s in create_bulk_insert_outputs_query(&outputs, &tx_ids) {
                         transaction.batch_execute(&s)?;
                     }
                     transaction.commit()?;
@@ -428,7 +435,7 @@ impl Pipeline {
                     );
                     let start = Instant::now();
                     let transaction = conn.transaction()?;
-                    for s in insert_inputs_query(&inputs, &output_ids) {
+                    for s in create_bulk_insert_inputs_query(&inputs, &output_ids) {
                         transaction.batch_execute(&s)?;
                     }
                     transaction.commit()?;
@@ -456,7 +463,7 @@ impl Pipeline {
                         batch_id
                     );
                     let start = Instant::now();
-                    for s in insert_blocks_query(&blocks) {
+                    for s in create_bulk_insert_blocks_query(&blocks) {
                         conn.batch_execute(&s)?;
                     }
                     trace!(
