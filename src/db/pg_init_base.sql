@@ -35,24 +35,12 @@ CREATE TABLE IF NOT EXISTS inputs (
 
 DROP VIEW IF EXISTS address_balances;
 
--- both outputs and inputs are `INNER JOIN`ed
--- on `blocks`, as only after `block` is commited,
--- we're sure that everything relevant to block
--- was fully indexed;
--- since it's so much complication, maybe we should
--- just add everything in one big transaction
--- to eliminate the need for it; hopefully this does not
--- affect performance
 CREATE VIEW address_balances AS
   SELECT address, SUM(
     CASE WHEN inputs.output_id IS NULL THEN value ELSE 0 END
   ) AS value
   FROM outputs
-    INNER JOIN blocks AS blocks_outputs
-      ON blocks_outputs.height = outputs.height
-    LEFT JOIN inputs
-      INNER JOIN blocks AS blocks_inputs ON blocks_inputs.height = inputs.height
-    ON outputs.id = inputs.output_id
+    LEFT JOIN inputs ON outputs.id = inputs.output_id
   GROUP BY
     outputs.address;
 
