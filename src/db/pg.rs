@@ -855,7 +855,7 @@ impl DataStore for Postresql {
         self.connection
             .execute("REMOVE FROM inputs WHERE height >= $1", &[&(height as i64)])?;
         self.connection.execute(
-            "REMOVE FROM inputs WHERE outputs >= $1",
+            "REMOVE FROM outputs WHERE height >= $1",
             &[&(height as i64)],
         )?;
 
