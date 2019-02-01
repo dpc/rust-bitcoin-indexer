@@ -2,7 +2,6 @@ pub mod mem;
 pub mod pg;
 
 use crate::prelude::*;
-use bitcoincore_rpc::Client;
 use common_failures::prelude::*;
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -35,6 +34,8 @@ struct Block {
     pub height: BlockHeight,
     pub hash: BlockHash,
     pub prev_hash: BlockHash,
+    pub merkle_root: Sha256dHash,
+    pub time: u32,
 }
 
 impl Block {
@@ -43,6 +44,8 @@ impl Block {
             height: info.height,
             hash: info.hash,
             prev_hash: info.block.header.prev_blockhash,
+            merkle_root: info.block.header.merkle_root,
+            time: info.block.header.time,
         }
     }
 }
@@ -109,7 +112,7 @@ impl Input {
     pub fn from_core_block(
         info: &BlockInfo,
         _tx: &bitcoin_core::Transaction,
-        idx: u32,
+        _idx: u32,
         tx_in: &bitcoin_core::TxIn,
     ) -> Self {
         Input {

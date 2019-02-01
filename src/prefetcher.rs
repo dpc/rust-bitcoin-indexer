@@ -69,20 +69,23 @@ pub struct Prefetcher {
     prev_hashes: HashMap<BlockHeight, BlockHash>,
     workers_finish: Arc<AtomicBool>,
     thread_num: usize,
-    rpc_info: RpcInfo,
+    rpc: Arc<bitcoincore_rpc::Client>,
     end_of_fast_sync: u64,
 }
 
 impl Prefetcher {
-    pub fn new(rpc_info: &RpcInfo, last_block: Option<(BlockHeight, BlockHash)>) -> Result<Self> {
+    pub fn new(
+        rpc: Arc<bitcoincore_rpc::Client>,
+        last_block: Option<BlockHeightAndHash>,
+    ) -> Result<Self> {
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
-        let mut rpc = rpc_info.to_rpc_client();
         let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
         let mut prev_hashes = HashMap::default();
-        let start = if let Some((h, hash)) = last_block {
-            prev_hashes.insert(h, hash);
+        let start = if let Some(h_and_hash) = last_block {
+            let h = h_and_hash.height;
+            prev_hashes.insert(h, h_and_hash.hash);
             info!("Starting block fetcher starting at {}H", h + 1);
             h + 1
         } else {
@@ -92,7 +95,7 @@ impl Prefetcher {
 
         let mut s = Self {
             rx: None,
-            rpc_info: rpc_info.to_owned(),
+            rpc,
             thread_joins: default(),
             thread_num,
             cur_height: start,
@@ -133,7 +136,7 @@ impl Prefetcher {
             self.thread_joins.push({
                 std::thread::spawn({
                     let next_height = next_height.clone();
-                    let mut rpc = self.rpc_info.to_rpc_client();
+                    let rpc = self.rpc.clone();
                     let tx = tx.clone();
                     let workers_finish = self.workers_finish.clone();
                     let retry_set = retry_set.clone();
@@ -249,7 +252,7 @@ impl Drop for Prefetcher {
 
 /// One worker thread, polling for data from the node
 struct Worker {
-    rpc: bitcoincore_rpc::Client,
+    rpc: Arc<bitcoincore_rpc::Client>,
     next_height: Arc<AtomicUsize>,
     retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
@@ -281,7 +284,7 @@ impl Worker {
                 }
                 Ok(item) => {
                     self.retry_count = 0;
-                    self.tx.send(item);
+                    self.tx.send(item).expect("Send must not fail");
                 }
             }
         }

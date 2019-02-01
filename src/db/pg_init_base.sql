@@ -2,7 +2,9 @@ CREATE TABLE IF NOT EXISTS blocks (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
   height BIGINT NOT NULL,
   hash BYTEA NOT NULL,
-  prev_hash BYTEA NOT NULL
+  prev_hash BYTEA NOT NULL,
+  merkle_root BYTEA NOT NULL,
+  time BIGINT NOT NULL
 );
 
 -- We always want these two, as a lot of logic is based

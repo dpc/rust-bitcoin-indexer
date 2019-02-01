@@ -3,13 +3,12 @@ use log::{debug, error, info, trace};
 use super::*;
 use crate::prelude::*;
 use dotenv::dotenv;
-use failure::format_err;
 use postgres::{transaction::Transaction, Connection, TlsMode};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{env, fmt::Write, str::FromStr};
+use std::{env, fmt::Write};
 
 pub fn establish_connection() -> Result<Connection> {
     dotenv()?;
@@ -30,18 +29,19 @@ fn create_bulk_insert_blocks_query(blocks: &[Block]) -> Vec<String> {
         return p1;
     }
 
-    let mut q: String = "INSERT INTO blocks (height, hash, prev_hash) VALUES".into();
+    let mut q: String =
+        "INSERT INTO blocks (height, hash, prev_hash, merkle_root, time) VALUES".into();
     for (i, block) in blocks.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({}, '\\x{}', '\\x{}')",
-            block.height, block.hash, block.prev_hash,
+            "({},'\\x{}','\\x{}','\\x{}', {})",
+            block.height, block.hash, block.prev_hash, block.merkle_root, block.time
         ))
         .unwrap();
     }
-    q.write_str(";");
+    q.write_str(";").expect("Write to string can't fail");
     return vec![q];
 }
 
@@ -68,7 +68,7 @@ fn create_bulk_insert_txs_query(txs: &[Tx]) -> Vec<String> {
         ))
         .unwrap();
     }
-    q.write_str(";");
+    q.write_str(";").expect("Write to string can't fail");
     return vec![q];
 }
 
@@ -107,7 +107,7 @@ fn create_bulk_insert_outputs_query(
         ))
         .unwrap();
     }
-    q.write_str(";");
+    q.write_str(";").expect("Write to string can't fail");
     return vec![q];
 }
 
@@ -137,7 +137,7 @@ fn create_bulk_insert_inputs_query(
         ))
         .unwrap();
     }
-    q.write_str(";");
+    q.write_str(";").expect("Write to string can't fail");
     vec![q]
 }
 
@@ -160,7 +160,7 @@ fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
         ))
         .unwrap();
     }
-    q.write_str(" );");
+    q.write_str(" );").expect("Write to string can't fail");
     vec![q]
 }
 
@@ -384,7 +384,6 @@ type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
 ///  between having two different versions of this logic, and good performance
 ///  in bulk mode.
 struct Pipeline {
-    in_flight: Arc<Mutex<BlocksInFlight>>,
     tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
     txs_thread: Option<std::thread::JoinHandle<Result<()>>>,
     outputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -421,11 +420,11 @@ impl PipelineMode {
 
 impl Pipeline {
     fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: PipelineMode) -> Result<Self> {
-        /// We use only rendezvous (0-size) channels, to allow passing
-        /// work and parallelism, but without doing any buffering of
-        /// work in the channels. Buffered work does not
-        /// improve performance, and  more things in flight means
-        /// incrased memory usage.
+        // We use only rendezvous (0-size) channels, to allow passing
+        // work and parallelism, but without doing any buffering of
+        // work in the channels. Buffered work does not
+        // improve performance, and  more things in flight means
+        // incrased memory usage.
         let (tx, txs_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
         let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
             u64,
@@ -564,9 +563,11 @@ impl Pipeline {
             let conn = establish_connection()?;
             let in_flight = in_flight.clone();
             fn_log_err("db_worker_blocks", move || {
+                let mut next_id = read_next_block_id(&conn)?;
                 while let Ok((batch_id, blocks, mut pending_queries)) = blocks_rx.recv() {
                     let queries = create_bulk_insert_blocks_query(&blocks);
 
+                    assert_eq!(next_id, read_next_block_id(&conn)?);
                     if mode.is_atomic() {
                         pending_queries.push(queries);
 
@@ -586,6 +587,9 @@ impl Pipeline {
                             queries.into_iter(),
                         )?;
                     }
+
+                    next_id += blocks.len() as i64;
+
                     info!(
                         "Block {}H fully indexed and commited",
                         blocks
@@ -607,7 +611,6 @@ impl Pipeline {
             })
         });
         Ok(Self {
-            in_flight,
             tx: Some(tx),
             txs_thread: Some(txs_thread),
             outputs_thread: Some(outputs_thread),
@@ -629,7 +632,9 @@ impl Drop for Pipeline {
         ];
 
         for join in joins {
-            join.join().expect("Worker thread panicked");
+            join.join()
+                .expect("Couldn't join on thread")
+                .expect("Worker thread panicked");
         }
     }
 }
@@ -694,6 +699,7 @@ impl Postresql {
     fn stop_workers(&mut self) {
         debug!("Stopping DB pipeline workers");
         self.pipeline.take();
+        debug!("Stopped DB pipeline workers");
         assert!(self.in_flight.lock().unwrap().is_empty());
     }
 
@@ -752,7 +758,8 @@ impl Postresql {
             .tx
             .as_ref()
             .expect("tx not null")
-            .send((self.batch_id, parsed));
+            .send((self.batch_id, parsed))
+            .expect("Send should not fail");
         trace!("Batch flushed");
         self.batch_txs_total = 0;
         self.batch_id += 1;
@@ -771,7 +778,7 @@ impl DataStore for Postresql {
         info!("Entering bulk mode: minimum indices");
         if !self.bulk_mode {
             self.bulk_mode = true;
-            self.flush_batch();
+            self.flush_batch()?;
             self.flush_workers();
         }
         self.connection
@@ -783,7 +790,7 @@ impl DataStore for Postresql {
         info!("Entering fresh mode: dropping all indices");
         if !self.bulk_mode {
             self.bulk_mode = true;
-            self.flush_batch();
+            self.flush_batch()?;
             self.flush_workers();
         }
         self.connection
@@ -794,7 +801,7 @@ impl DataStore for Postresql {
     fn mode_normal(&mut self) -> Result<()> {
         if self.bulk_mode {
             self.bulk_mode = false;
-            self.flush_batch();
+            self.flush_batch()?;
             self.flush_workers();
         }
         info!("Entering normal mode: creating all indices");
@@ -835,7 +842,7 @@ impl DataStore for Postresql {
 
         // TODO: This could be done better, if we were just tracking
         // things in flight better
-        self.flush_batch();
+        self.flush_batch()?;
         if !self.in_flight.lock().unwrap().is_empty() {
             eprintln!("TODO: Unnecessary flush");
             self.flush_workers();
@@ -861,7 +868,7 @@ impl DataStore for Postresql {
         info!("Reorg detected at {}H", height);
         // If we're doing reorgs, that means we have to be close to chainhead
         // this will also flush the batch and workers
-        self.mode_normal();
+        self.mode_normal()?;
 
         let transaction = self.connection.transaction()?;
         // Always start with removing `blocks` since that invalidates
@@ -885,13 +892,13 @@ impl DataStore for Postresql {
         self.batch_txs_total += info.block.txdata.len() as u64;
         self.batch.push(info);
         if self.batch_txs_total > 100_000 {
-            self.flush_batch();
+            self.flush_batch()?;
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<()> {
-        self.flush_batch();
+        self.flush_batch()?;
         Ok(())
     }
 

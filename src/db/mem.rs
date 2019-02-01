@@ -24,7 +24,7 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
-    fn wipe_to_height(&mut self, height: u64) -> Result<()> {
+    fn wipe_to_height(&mut self, _height: u64) -> Result<()> {
         Ok(())
     }
 

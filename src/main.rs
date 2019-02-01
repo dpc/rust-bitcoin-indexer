@@ -1,36 +1,34 @@
 #![allow(unused)] // need some cleanup
 
-mod db;
-mod opts;
-mod prefetcher;
-mod prelude;
-
-use self::db::DataStore;
-use crate::prelude::*;
+use bitcoin_indexer::{
+    db::{self, DataStore},
+    opts, prefetcher,
+    prelude::*,
+};
 use log::info;
+use std::sync::Arc;
 
 use common_failures::{prelude::*, quick_main};
 
 struct Indexer {
     node_starting_chainhead_height: u64,
-    rpc: bitcoincore_rpc::Client,
-    rpc_info: RpcInfo,
+    rpc: Arc<bitcoincore_rpc::Client>,
     db: Box<dyn db::DataStore>,
 }
 
 impl Indexer {
     fn new(rpc_info: RpcInfo, db: impl db::DataStore + 'static) -> Result<Self> {
-        let mut rpc = bitcoincore_rpc::Client::new(
+        let rpc = bitcoincore_rpc::Client::new(
             rpc_info.url.clone(),
             rpc_info.user.clone(),
             rpc_info.password.clone(),
         );
+        let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {
             rpc,
-            rpc_info,
             node_starting_chainhead_height,
             db: Box::new(db),
         })
@@ -78,12 +76,13 @@ impl Indexer {
                 self.db.mode_bulk()?;
             }
             let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
-            Some((
-                start_from_block,
-                self.db
+            Some(BlockHeightAndHash {
+                height: start_from_block,
+                hash: self
+                    .db
                     .get_hash_by_height(start_from_block)?
                     .expect("Block hash should be there"),
-            ))
+            })
         } else {
             // test indices dropping and creation
             self.db.mode_fresh()?;
@@ -95,7 +94,7 @@ impl Indexer {
             None
         };
 
-        let prefetcher = prefetcher::Prefetcher::new(&self.rpc_info, start)?;
+        let prefetcher = prefetcher::Prefetcher::new(self.rpc.clone(), start)?;
         for item in prefetcher {
             self.process_block(item)?;
         }

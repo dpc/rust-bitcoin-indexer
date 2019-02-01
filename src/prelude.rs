@@ -1,4 +1,4 @@
-use bitcoin::util::{address, hash::Sha256dHash};
+use bitcoin::util::address;
 pub use default::default;
 pub use insideout::InsideOut;
 
@@ -9,15 +9,18 @@ pub mod bitcoin_core {
             transaction::{Transaction, TxIn, TxOut},
         },
         consensus::Decodable,
-        util::{
-            hash::{Hash160, Sha256dHash},
-            privkey::Privkey,
-        },
+        util::{hash::Hash160, privkey::Privkey},
     };
 }
 
 pub type BlockHeight = u64;
 pub type BlockHash = Sha256dHash;
+pub struct BlockHeightAndHash {
+    pub height: BlockHeight,
+    pub hash: BlockHash,
+}
+
+pub use bitcoin::util::hash::Sha256dHash;
 pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 pub type TxHash = Sha256dHash;
@@ -51,7 +54,6 @@ fn bech_network(
         Network::Bitcoin => bitcoin_bech32::constants::Network::Bitcoin,
         Network::Testnet => bitcoin_bech32::constants::Network::Testnet,
         Network::Regtest => bitcoin_bech32::constants::Network::Regtest,
-        _ => panic!("unsupported network"),
     }
 }
 
