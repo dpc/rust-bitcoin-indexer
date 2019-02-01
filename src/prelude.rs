@@ -66,9 +66,7 @@ pub fn address_from_script(
         } else if script.is_p2pkh() {
             address::Payload::PubkeyHash(script.as_bytes()[3..23].into())
         } else if script.is_p2pk() {
-            let secp = secp256k1::Secp256k1::without_caps();
             let pubkey = match secp256k1::key::PublicKey::from_slice(
-                &secp,
                 &script.as_bytes()[1..(script.len() - 1)],
             ) {
                 Ok(p) => p,
