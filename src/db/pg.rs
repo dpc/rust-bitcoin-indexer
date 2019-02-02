@@ -45,26 +45,26 @@ fn create_bulk_insert_blocks_query(blocks: &[Block]) -> Vec<String> {
     return vec![q];
 }
 
-fn create_bulk_insert_txs_query(txs: &[Tx]) -> Vec<String> {
+fn create_bulk_insert_txs_query(txs: &[Tx], block_ids: &HashMap<BlockHash, i64>) -> Vec<String> {
     if txs.is_empty() {
         return vec![];
     }
     if txs.len() > 9000 {
         let mid = txs.len() / 2;
-        let mut p1 = create_bulk_insert_txs_query(&txs[0..mid]);
-        let mut p2 = create_bulk_insert_txs_query(&txs[mid..txs.len()]);
+        let mut p1 = create_bulk_insert_txs_query(&txs[0..mid], block_ids);
+        let mut p2 = create_bulk_insert_txs_query(&txs[mid..txs.len()], block_ids);
         p1.append(&mut p2);
         return p1;
     }
 
-    let mut q: String = "INSERT INTO txs (height, hash, coinbase) VALUES".into();
+    let mut q: String = "INSERT INTO txs (block_id, hash, coinbase) VALUES".into();
     for (i, tx) in txs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
             "({},'\\x{}',{})",
-            tx.height, tx.hash, tx.coinbase,
+            block_ids[&tx.block_hash], tx.hash, tx.coinbase,
         ))
         .unwrap();
     }
@@ -88,14 +88,13 @@ fn create_bulk_insert_outputs_query(
     }
 
     let mut q: String =
-        "INSERT INTO outputs (height, tx_id, tx_idx, value, address, coinbase) VALUES ".into();
+        "INSERT INTO outputs (tx_id, tx_idx, value, address, coinbase) VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({},{},{},{},{},{})",
-            output.height,
+            "({},{},{},{},{})",
             tx_ids[&output.out_point.txid],
             output.out_point.vout,
             output.value,
@@ -114,26 +113,27 @@ fn create_bulk_insert_outputs_query(
 fn create_bulk_insert_inputs_query(
     inputs: &[Input],
     outputs: &HashMap<OutPoint, UtxoSetEntry>,
+    tx_ids: &HashMap<TxHash, i64>,
 ) -> Vec<String> {
     if inputs.is_empty() {
         return vec![];
     }
     if inputs.len() > 9000 {
         let mid = inputs.len() / 2;
-        let mut p1 = create_bulk_insert_inputs_query(&inputs[0..mid], outputs);
-        let mut p2 = create_bulk_insert_inputs_query(&inputs[mid..inputs.len()], outputs);
+        let mut p1 = create_bulk_insert_inputs_query(&inputs[0..mid], outputs, tx_ids);
+        let mut p2 = create_bulk_insert_inputs_query(&inputs[mid..inputs.len()], outputs, tx_ids);
         p1.append(&mut p2);
         return p1;
     }
 
-    let mut q: String = "INSERT INTO inputs (height, output_id) VALUES ".into();
+    let mut q: String = "INSERT INTO inputs (output_id, tx_id) VALUES ".into();
     for (i, input) in inputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
             "({},{})",
-            input.height, outputs[&input.out_point].id,
+            outputs[&input.out_point].id, tx_ids[&input.tx_id]
         ))
         .unwrap();
     }
@@ -360,7 +360,7 @@ fn wipe_blocks_higher_than_height(transaction: &Transaction, height: BlockHeight
     wipe_gt_height_from_id_sorted_table(transaction, "blocks", "id", height)
 }
 
-type BlocksInFlight = HashMap<BlockHeight, BlockHash>;
+type BlocksInFlight = HashMap<BlockHash, BlockHash>;
 
 /// Worker Pipepline
 ///
@@ -425,27 +425,42 @@ impl Pipeline {
         // work in the channels. Buffered work does not
         // improve performance, and  more things in flight means
         // incrased memory usage.
-        let (tx, txs_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
-        let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
+        let (tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
+
+        let (blocks_tx, txs_rx) = crossbeam_channel::bounded::<(
             u64,
-            Vec<Block>,
+            HashMap<BlockHash, i64>,
+            Vec<Tx>,
             Vec<Output>,
             Vec<Input>,
-            HashMap<TxHash, i64>,
+            u64,
             Vec<Vec<String>>,
         )>(0);
-        let (outputs_tx, inputs_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Input>, Vec<Vec<String>>)>(0);
 
-        let (inputs_tx, blocks_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<Block>, Vec<Vec<String>>)>(0);
+        let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
+            u64,
+            HashMap<TxHash, i64>,
+            Vec<Output>,
+            Vec<Input>,
+            u64,
+            Vec<Vec<String>>,
+        )>(0);
+
+        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<(
+            u64,
+            HashMap<TxHash, i64>,
+            Vec<Input>,
+            u64,
+            Vec<Vec<String>>,
+        )>(0);
+
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
-        let txs_thread = std::thread::spawn({
+        let blocks_thread = std::thread::spawn({
             let conn = establish_connection()?;
-            fn_log_err("db_worker_txs", move || {
-                let mut next_id = read_next_tx_id(&conn)?;
-                while let Ok((batch_id, parsed)) = txs_rx.recv() {
+            fn_log_err("db_worker_blocks", move || {
+                let mut next_id = read_next_block_id(&conn)?;
+                while let Ok((batch_id, parsed)) = blocks_rx.recv() {
                     let mut blocks: Vec<super::Block> = vec![];
                     let mut txs: Vec<super::Tx> = vec![];
                     let mut outputs: Vec<super::Output> = vec![];
@@ -459,7 +474,78 @@ impl Pipeline {
                         inputs.append(&mut parsed.inputs);
                     }
 
-                    let queries = create_bulk_insert_txs_query(&txs);
+                    let max_block_height = blocks
+                        .iter()
+                        .rev()
+                        .next()
+                        .map(|b| b.height)
+                        .expect("at least one block");
+
+                    let min_block_height = blocks
+                        .iter()
+                        .next()
+                        .map(|b| b.height)
+                        .expect("at least one block");
+
+                    let blocks_len = blocks.len();
+
+                    let mut insert_queries = create_bulk_insert_blocks_query(&blocks);
+                    let mut queries = vec![format!(
+                        "UPDATE blocks SET orphaned = true WHERE height >= {};",
+                        min_block_height
+                    )];
+                    queries.append(&mut insert_queries);
+
+                    if mode.is_atomic() {
+                        pending_queries.push(queries);
+                    } else {
+                        assert_eq!(next_id, read_next_block_id(&conn)?);
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "blocks",
+                            blocks.len(),
+                            batch_id,
+                            queries.into_iter(),
+                        )?;
+                    }
+
+                    let block_ids: HashMap<_, _> = blocks
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, tx)| (tx.hash, next_id + i as i64))
+                        .collect();
+
+                    next_id += blocks_len as i64;
+
+                    blocks_tx.send((
+                        batch_id,
+                        block_ids,
+                        txs,
+                        outputs,
+                        inputs,
+                        max_block_height,
+                        pending_queries,
+                    ))?;
+                }
+                Ok(())
+            })
+        });
+        let txs_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            fn_log_err("db_worker_txs", move || {
+                let mut next_id = read_next_tx_id(&conn)?;
+                while let Ok((
+                    batch_id,
+                    block_ids,
+                    txs,
+                    outputs,
+                    inputs,
+                    max_block_height,
+                    mut pending_queries,
+                )) = txs_rx.recv()
+                {
+                    let queries = create_bulk_insert_txs_query(&txs, &block_ids);
+
                     if mode.is_atomic() {
                         pending_queries.push(queries);
                     } else {
@@ -482,7 +568,14 @@ impl Pipeline {
 
                     next_id += batch_len as i64;
 
-                    txs_tx.send((batch_id, blocks, outputs, inputs, tx_ids, pending_queries))?;
+                    txs_tx.send((
+                        batch_id,
+                        tx_ids,
+                        outputs,
+                        inputs,
+                        max_block_height,
+                        pending_queries,
+                    ))?;
                 }
                 Ok(())
             })
@@ -493,8 +586,14 @@ impl Pipeline {
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_outputs", move || {
                 let mut next_id = read_next_output_id(&conn)?;
-                while let Ok((batch_id, blocks, outputs, inputs, tx_ids, mut pending_queries)) =
-                    outputs_rx.recv()
+                while let Ok((
+                    batch_id,
+                    tx_ids,
+                    outputs,
+                    inputs,
+                    max_block_height,
+                    mut pending_queries,
+                )) = outputs_rx.recv()
                 {
                     let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
 
@@ -520,7 +619,13 @@ impl Pipeline {
 
                     next_id += outputs.len() as i64;
 
-                    outputs_tx.send((batch_id, blocks, inputs, pending_queries))?;
+                    outputs_tx.send((
+                        batch_id,
+                        tx_ids,
+                        inputs,
+                        max_block_height,
+                        pending_queries,
+                    ))?;
                 }
                 Ok(())
             })
@@ -530,7 +635,9 @@ impl Pipeline {
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_inputs", move || {
-                while let Ok((batch_id, blocks, inputs, mut pending_queries)) = inputs_rx.recv() {
+                while let Ok((batch_id, block_ids, inputs, max_block_height, mut pending_queries)) =
+                    inputs_rx.recv()
+                {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
@@ -540,9 +647,24 @@ impl Pipeline {
                         output_ids.insert(k, v);
                     }
 
-                    let queries = create_bulk_insert_inputs_query(&inputs, &output_ids);
+                    let mut queries =
+                        create_bulk_insert_inputs_query(&inputs, &output_ids, &block_ids);
+
+                    queries.push(format!(
+                        "UPDATE indexer_state SET height = {};",
+                        max_block_height
+                    ));
+
                     if mode.is_atomic() {
                         pending_queries.push(queries);
+
+                        execute_bulk_insert_transcation(
+                            &conn,
+                            "all block data",
+                            block_ids.len(),
+                            batch_id,
+                            pending_queries.into_iter().flatten(),
+                        )?;
                     } else {
                         execute_bulk_insert_transcation(
                             &conn,
@@ -553,56 +675,12 @@ impl Pipeline {
                         )?;
                     }
 
-                    inputs_tx.send((batch_id, blocks, pending_queries))?;
-                }
-                Ok(())
-            })
-        });
+                    info!("Block {}H fully indexed and commited", max_block_height);
 
-        let blocks_thread = std::thread::spawn({
-            let conn = establish_connection()?;
-            let in_flight = in_flight.clone();
-            fn_log_err("db_worker_blocks", move || {
-                let mut next_id = read_next_block_id(&conn)?;
-                while let Ok((batch_id, blocks, mut pending_queries)) = blocks_rx.recv() {
-                    let queries = create_bulk_insert_blocks_query(&blocks);
-
-                    assert_eq!(next_id, read_next_block_id(&conn)?);
-                    if mode.is_atomic() {
-                        pending_queries.push(queries);
-
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "all block data",
-                            blocks.len(),
-                            batch_id,
-                            pending_queries.into_iter().flatten(),
-                        )?;
-                    } else {
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "blocks",
-                            blocks.len(),
-                            batch_id,
-                            queries.into_iter(),
-                        )?;
-                    }
-
-                    next_id += blocks.len() as i64;
-
-                    info!(
-                        "Block {}H fully indexed and commited",
-                        blocks
-                            .iter()
-                            .rev()
-                            .next()
-                            .map(|b| b.height)
-                            .expect("at least one block")
-                    );
                     let mut any_missing = false;
                     let mut lock = in_flight.lock().unwrap();
-                    for block in &blocks {
-                        any_missing = any_missing || lock.remove(&block.height).is_none();
+                    for hash in block_ids.keys() {
+                        any_missing = any_missing || lock.remove(&hash).is_none();
                     }
                     drop(lock);
                     assert!(!any_missing);
@@ -610,6 +688,7 @@ impl Pipeline {
                 Ok(())
             })
         });
+
         Ok(Self {
             tx: Some(tx),
             txs_thread: Some(txs_thread),
@@ -660,6 +739,8 @@ impl Drop for Postresql {
 impl Postresql {
     pub fn new() -> Result<Self> {
         let connection = establish_connection()?;
+        Self::init(&connection)?;
+        let (height, bulk_mode) = Self::read_indexer_state(&connection)?;
         let mut s = Postresql {
             connection,
             pipeline: None,
@@ -667,19 +748,30 @@ impl Postresql {
             batch: vec![],
             batch_txs_total: 0,
             batch_id: 0,
-            bulk_mode: true,
+            bulk_mode,
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
         };
-        s.init()?;
-        s.wipe_inconsistent_data()?;
+        s.wipe_inconsistent_data(height)?;
         s.start_workers();
         Ok(s)
     }
 
-    fn init(&mut self) -> Result<()> {
+    fn read_indexer_state(conn: &Connection) -> Result<(Option<u64>, bool)> {
+        let state = conn.query("SELECT bulk_mode, height FROM indexer_state", &[])?;
+        if let Some(state) = state.iter().next() {
+            Ok((Some(state.get::<_, i64>(1) as u64), state.get(0)))
+        } else {
+            conn.execute(
+                "INSERT INTO indexer_state (bulk_mode, height) VALUES (true, NULL)",
+                &[],
+            )?;
+            Ok((None, true))
+        }
+    }
+
+    fn init(conn: &Connection) -> Result<()> {
         info!("Creating db schema");
-        self.connection
-            .batch_execute(include_str!("pg_init_base.sql"))?;
+        conn.batch_execute(include_str!("pg_init_base.sql"))?;
         Ok(())
     }
 
@@ -688,8 +780,8 @@ impl Postresql {
     ///
     /// `Blocks` is  the last table to have data inserted, and is
     /// used as a commitment that everything else was inserted already..
-    fn wipe_inconsistent_data(&mut self) -> Result<()> {
-        if let Some(height) = self.get_max_height()? {
+    fn wipe_inconsistent_data(&mut self, height: Option<BlockHeight>) -> Result<()> {
+        if let Some(height) = height {
             self.wipe_to_height(height)?;
         }
 
@@ -748,7 +840,7 @@ impl Postresql {
 
         let mut in_flight = self.in_flight.lock().expect("locking works");
         for parsed in &parsed {
-            in_flight.insert(parsed.block.height, parsed.block.hash);
+            in_flight.insert(parsed.block.hash, parsed.block.hash);
         }
         drop(in_flight);
 

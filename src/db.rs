@@ -51,8 +51,8 @@ impl Block {
 }
 #[derive(Debug, Clone)]
 struct Tx {
-    pub height: BlockHeight,
     pub hash: TxHash,
+    pub block_hash: BlockHash,
     pub coinbase: bool,
 }
 
@@ -64,7 +64,7 @@ impl Tx {
     ) -> Self {
         let coinbase = tx.is_coin_base();
         Self {
-            height: info.height,
+            block_hash: info.hash,
             hash: tx_id,
             coinbase,
         }
@@ -72,7 +72,6 @@ impl Tx {
 }
 #[derive(Debug, Clone)]
 struct Output {
-    pub height: BlockHeight,
     pub out_point: OutPoint,
     pub value: u64,
     pub address: Option<String>,
@@ -81,7 +80,7 @@ struct Output {
 
 impl Output {
     pub fn from_core_block(
-        info: &BlockInfo,
+        _info: &BlockInfo,
         tx_id: TxHash,
         tx: &bitcoin_core::Transaction,
         idx: u32,
@@ -89,7 +88,6 @@ impl Output {
     ) -> Self {
         let network = bitcoin::network::constants::Network::Bitcoin;
         Self {
-            height: info.height,
             out_point: OutPoint {
                 txid: tx_id,
                 vout: idx,
@@ -104,23 +102,18 @@ impl Output {
 /// Created when Output is spent, referencing it
 #[derive(Debug, Clone)]
 struct Input {
-    pub height: BlockHeight,
     pub out_point: OutPoint,
+    pub tx_id: TxHash,
 }
 
 impl Input {
-    pub fn from_core_block(
-        info: &BlockInfo,
-        _tx: &bitcoin_core::Transaction,
-        _idx: u32,
-        tx_in: &bitcoin_core::TxIn,
-    ) -> Self {
+    pub fn from_core_block(_info: &BlockInfo, tx_id: TxHash, tx_in: &bitcoin_core::TxIn) -> Self {
         Input {
-            height: info.height,
             out_point: OutPoint {
                 txid: tx_in.previous_output.txid,
                 vout: tx_in.previous_output.vout,
             },
+            tx_id,
         }
     }
 }
@@ -165,8 +158,8 @@ fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
             ))
         }
         if !tx.is_coin_base() {
-            for (idx, tx_in) in tx.input.iter().enumerate() {
-                inputs.push(Input::from_core_block(info, &tx, idx as u32, tx_in));
+            for (_idx, tx_in) in tx.input.iter().enumerate() {
+                inputs.push(Input::from_core_block(info, tx_id, tx_in));
             }
         }
     }
