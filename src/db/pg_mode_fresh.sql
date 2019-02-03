@@ -1,5 +1,4 @@
-DROP INDEX IF EXISTS blocks_reverted;
-
+DROP INDEX IF EXISTS blocks_orphaned;
 
 DROP INDEX IF EXISTS txs_hash;
 DROP INDEX IF EXISTS txs_block_id;

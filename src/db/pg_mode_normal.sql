@@ -1,4 +1,4 @@
-CREATE INDEX IF NOT EXISTS blocks_reverted ON blocks (reverted);
+CREATE INDEX IF NOT EXISTS blocks_orphaned ON blocks (orphaned);
 
 CREATE UNIQUE INDEX IF NOT EXISTS txs_hash ON txs (hash, block_id);
 CREATE INDEX IF NOT EXISTS txs_block_id ON txs (block_id);

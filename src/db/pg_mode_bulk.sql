@@ -4,7 +4,7 @@ CREATE INDEX IF NOT EXISTS outputs_tx_id_tx_idx ON outputs (tx_id, tx_idx);
 
 CREATE INDEX IF NOT EXISTS inputs_tx_id ON inputs (tx_id);
 
-DROP INDEX IF EXISTS blocks_reverted;
+DROP INDEX IF EXISTS blocks_orphaned;
 
 DROP INDEX IF EXISTS txs_hash;
 DROP INDEX IF EXISTS txs_block_id;

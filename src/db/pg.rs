@@ -5,7 +5,7 @@ use crate::prelude::*;
 use dotenv::dotenv;
 use postgres::{transaction::Transaction, Connection, TlsMode};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{env, fmt::Write};
@@ -149,7 +149,7 @@ fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) WHERE (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
+    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.orphaned = false AND (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -360,7 +360,7 @@ fn wipe_blocks_higher_than_height(transaction: &Transaction, height: BlockHeight
     wipe_gt_height_from_id_sorted_table(transaction, "blocks", "id", height)
 }
 
-type BlocksInFlight = HashMap<BlockHash, BlockHash>;
+type BlocksInFlight = HashSet<BlockHash>;
 
 /// Worker Pipepline
 ///
@@ -439,6 +439,7 @@ impl Pipeline {
 
         let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
             u64,
+            HashMap<BlockHash, i64>,
             HashMap<TxHash, i64>,
             Vec<Output>,
             Vec<Input>,
@@ -448,6 +449,7 @@ impl Pipeline {
 
         let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<(
             u64,
+            HashMap<BlockHash, i64>,
             HashMap<TxHash, i64>,
             Vec<Input>,
             u64,
@@ -570,6 +572,7 @@ impl Pipeline {
 
                     txs_tx.send((
                         batch_id,
+                        block_ids,
                         tx_ids,
                         outputs,
                         inputs,
@@ -588,6 +591,7 @@ impl Pipeline {
                 let mut next_id = read_next_output_id(&conn)?;
                 while let Ok((
                     batch_id,
+                    block_ids,
                     tx_ids,
                     outputs,
                     inputs,
@@ -621,6 +625,7 @@ impl Pipeline {
 
                     outputs_tx.send((
                         batch_id,
+                        block_ids,
                         tx_ids,
                         inputs,
                         max_block_height,
@@ -635,8 +640,14 @@ impl Pipeline {
             let conn = establish_connection()?;
             let utxo_set_cache = utxo_set_cache.clone();
             fn_log_err("db_worker_inputs", move || {
-                while let Ok((batch_id, block_ids, inputs, max_block_height, mut pending_queries)) =
-                    inputs_rx.recv()
+                while let Ok((
+                    batch_id,
+                    block_ids,
+                    tx_ids,
+                    inputs,
+                    max_block_height,
+                    mut pending_queries,
+                )) = inputs_rx.recv()
                 {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
@@ -648,7 +659,7 @@ impl Pipeline {
                     }
 
                     let mut queries =
-                        create_bulk_insert_inputs_query(&inputs, &output_ids, &block_ids);
+                        create_bulk_insert_inputs_query(&inputs, &output_ids, &tx_ids);
 
                     queries.push(format!(
                         "UPDATE indexer_state SET height = {};",
@@ -680,7 +691,8 @@ impl Pipeline {
                     let mut any_missing = false;
                     let mut lock = in_flight.lock().unwrap();
                     for hash in block_ids.keys() {
-                        any_missing = any_missing || lock.remove(&hash).is_none();
+                        let missing = !lock.remove(&hash);
+                        any_missing = any_missing || missing;
                     }
                     drop(lock);
                     assert!(!any_missing);
@@ -759,7 +771,10 @@ impl Postresql {
     fn read_indexer_state(conn: &Connection) -> Result<(Option<u64>, bool)> {
         let state = conn.query("SELECT bulk_mode, height FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
-            Ok((Some(state.get::<_, i64>(1) as u64), state.get(0)))
+            Ok((
+                state.get::<_, Option<i64>>(1).map(|h| h as u64),
+                state.get(0),
+            ))
         } else {
             conn.execute(
                 "INSERT INTO indexer_state (bulk_mode, height) VALUES (true, NULL)",
@@ -781,8 +796,18 @@ impl Postresql {
     /// `Blocks` is  the last table to have data inserted, and is
     /// used as a commitment that everything else was inserted already..
     fn wipe_inconsistent_data(&mut self, height: Option<BlockHeight>) -> Result<()> {
-        if let Some(height) = height {
-            self.wipe_to_height(height)?;
+        // there could be no inconsistent date outside of bulk mode
+        if self.bulk_mode {
+            if let Some(height) = height {
+                info!("Deleting potentially inconsistent data from previous bulk run");
+                let transaction = self.connection.transaction()?;
+                transaction.execute("DELETE FROM blocks WHERE height > $1", &[&(height as i64)])?;
+                transaction.execute("DELETE FROM txs WHERE id IN (SELECT txs.id FROM txs LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.id IS NULL)", &[])?;
+                transaction.execute("DELETE FROM outputs WHERE id IN (SELECT outputs.id FROM outputs LEFT JOIN txs ON outputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+                transaction.execute("DELETE FROM inputs WHERE output_id IN (SELECT inputs.output_id FROM inputs LEFT JOIN txs ON inputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+                transaction.commit()?;
+                trace!("Deleted potentially inconsistent data from previous bulk run");
+            }
         }
 
         Ok(())
@@ -840,7 +865,7 @@ impl Postresql {
 
         let mut in_flight = self.in_flight.lock().expect("locking works");
         for parsed in &parsed {
-            in_flight.insert(parsed.block.hash, parsed.block.hash);
+            in_flight.insert(parsed.block.hash);
         }
         drop(in_flight);
 
@@ -905,15 +930,6 @@ impl DataStore for Postresql {
     // TODO: semantics against things in flight are unclear
     // Document.
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
-        /*
-                self.cached_max_height = self
-                    .connection
-                    .query("SELECT MAX(height) FROM blocks", &[])?
-                    .iter()
-                    .next()
-                    .and_then(|row| row.get::<_, Option<i64>>(0))
-                    .map(|u| u as u64);
-        */
         self.cached_max_height = self
             .connection
             .query("SELECT height FROM blocks ORDER BY id DESC LIMIT 1", &[])?
