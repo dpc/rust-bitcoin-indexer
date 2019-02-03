@@ -728,7 +728,7 @@ impl Postresql {
 
     fn init(conn: &Connection) -> Result<()> {
         info!("Creating db schema");
-        conn.batch_execute(include_str!("pg_init_base.sql"))?;
+        conn.batch_execute(include_str!("pg/init_base.sql"))?;
         Ok(())
     }
 
@@ -822,7 +822,7 @@ impl Postresql {
     pub fn wipe() -> Result<()> {
         info!("Wiping db schema");
         let connection = establish_connection()?;
-        connection.batch_execute(include_str!("pg_wipe.sql"))?;
+        connection.batch_execute(include_str!("pg/wipe.sql"))?;
         Ok(())
     }
 }
@@ -836,7 +836,7 @@ impl DataStore for Postresql {
             self.flush_workers();
         }
         self.connection
-            .batch_execute(include_str!("pg_mode_bulk.sql"))?;
+            .batch_execute(include_str!("pg/mode_bulk.sql"))?;
         Ok(())
     }
 
@@ -848,7 +848,7 @@ impl DataStore for Postresql {
             self.flush_workers();
         }
         self.connection
-            .batch_execute(include_str!("pg_mode_fresh.sql"))?;
+            .batch_execute(include_str!("pg/mode_fresh.sql"))?;
         Ok(())
     }
 
@@ -860,7 +860,7 @@ impl DataStore for Postresql {
         }
         info!("Entering normal mode: creating all indices");
         self.connection
-            .batch_execute(include_str!("pg_mode_normal.sql"))?;
+            .batch_execute(include_str!("pg/mode_normal.sql"))?;
         Ok(())
     }
 
