@@ -7,9 +7,6 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 pub trait DataStore {
-    /// Wipe the db
-    fn wipe(&mut self) -> Result<()>;
-
     /// Fresh start
     fn mode_fresh(&mut self) -> Result<()>;
 

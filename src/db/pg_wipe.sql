@@ -1,4 +1,3 @@
-
 DROP VIEW IF EXISTS address_balances_at_height;
 DROP VIEW IF EXISTS address_balances;
 

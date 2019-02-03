@@ -8,10 +8,6 @@ pub struct MemDataStore {
 }
 
 impl DataStore for MemDataStore {
-    fn wipe(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn mode_fresh(&mut self) -> Result<()> {
         Ok(())
     }

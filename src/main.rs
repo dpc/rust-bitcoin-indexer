@@ -108,13 +108,14 @@ fn run() -> Result<()> {
         password: opts.node_rpc_pass,
     };
     //let mut db = db::mem::MemDataStore::default();
-    let mut db = db::pg::Postresql::new()?;
 
     if opts.wipe_db {
-        db.wipe()?;
+        db::pg::Postresql::wipe()?;
     } else if let Some(height) = opts.wipe_to_height {
+        let mut db = db::pg::Postresql::new()?;
         db.wipe_to_height(height)?;
     } else {
+        let mut db = db::pg::Postresql::new()?;
         let mut indexer = Indexer::new(rpc_info, db)?;
         indexer.run()?;
     }

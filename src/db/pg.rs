@@ -818,15 +818,16 @@ impl Postresql {
         self.batch_id += 1;
         Ok(())
     }
+
+    pub fn wipe() -> Result<()> {
+        info!("Wiping db schema");
+        let connection = establish_connection()?;
+        connection.batch_execute(include_str!("pg_wipe.sql"))?;
+        Ok(())
+    }
 }
 
 impl DataStore for Postresql {
-    fn wipe(&mut self) -> Result<()> {
-        info!("Wiping db schema");
-        self.connection.batch_execute(include_str!("pg_wipe.sql"))?;
-        Ok(())
-    }
-
     fn mode_bulk(&mut self) -> Result<()> {
         info!("Entering bulk mode: minimum indices");
         if !self.bulk_mode {
