@@ -32,26 +32,9 @@ impl DataStore for MemDataStore {
         Ok(self.block_hashes.get(&height).cloned())
     }
 
-    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
-        for height in height.. {
-            if self.blocks.remove(&height).is_none() {
-                break;
-            }
-            self.block_hashes
-                .remove(&height)
-                .expect("block_hashes out of sync");
-        }
-
-        Ok(())
-    }
-
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
         let parsed = super::parse_node_block(&info)?;
         self.blocks.insert(info.height, parsed.block);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<()> {
         Ok(())
     }
 

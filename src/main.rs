@@ -46,15 +46,11 @@ impl Indexer {
                     "Node block != db block at {}H; {} != {} - reorg",
                     block_height, binfo.hash, db_hash
                 );
-                self.db.reorg_at_height(block_height);
                 self.db.insert(binfo)?;
             }
         } else {
             self.db.insert(binfo)?;
             if block_height >= self.node_starting_chainhead_height {
-                // After we've reached the node chain-head, we want everything
-                // to appear immediately, even if it's slower
-                self.db.flush()?;
                 if block_height == self.node_starting_chainhead_height {
                     self.db.mode_normal()?;
                 }

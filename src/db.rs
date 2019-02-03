@@ -24,9 +24,7 @@ pub trait DataStore {
 
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
-    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()>;
     fn insert(&mut self, info: BlockInfo) -> Result<()>;
-    fn flush(&mut self) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]

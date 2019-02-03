@@ -3,7 +3,7 @@ use log::{debug, error, info, trace};
 use super::*;
 use crate::prelude::*;
 use dotenv::dotenv;
-use postgres::{transaction::Transaction, Connection, TlsMode};
+use postgres::{Connection, TlsMode};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -149,7 +149,7 @@ fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs INNER JOIN txs ON (txs.id = outputs.tx_id) LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.orphaned = false AND (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
+    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs JOIN txs ON (txs.id = outputs.tx_id) JOIN blocks ON txs.block_id = blocks.id WHERE blocks.orphaned = false AND (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -302,64 +302,6 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "blocks", "id")
 }
 
-/// Wipe all records with `> height` from table sorted by id
-///
-/// This is useful for cases, when we don't have an index on `height` (yet).
-///
-/// We can use the fact that both `ids` (primary keys) and `height`
-/// are growing monotonicially, and delete all records with `height`
-/// greather than a given argument without having a index on `height`
-/// itself, by using taking a fixed chunk with highest `id` and deleting
-/// by `height` from it.
-fn wipe_gt_height_from_id_sorted_table(
-    transaction: &Transaction,
-    table: &str,
-    id_col_name: &str,
-    height: BlockHeight,
-) -> Result<()> {
-    debug!("Wiping {} higher than {}H", table, height);
-    let start = Instant::now();
-    let q = format!("DELETE FROM {table} WHERE {id_col} > (SELECT max({id_col}) - 100000 FROM {table}) AND height > $1;",
-                   table = table, id_col = id_col_name);
-
-    let mut total = 0;
-    loop {
-        let deleted = transaction.execute(&q, &[&(height as i64)])?;
-        total += deleted;
-        if deleted == 0 {
-            break;
-        }
-    }
-
-    trace!(
-        "Wiped {} records from {} in {}s",
-        total,
-        table,
-        Instant::now().duration_since(start).as_secs()
-    );
-    Ok(())
-}
-
-fn wipe_txs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
-    wipe_gt_height_from_id_sorted_table(transaction, "txs", "id", height)
-}
-fn wipe_inputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
-    // `input` table is special - as it does not have it's own `id` column; it's generally
-    // unnecessary, as `output_id` is unique; however it does not grow with height, so can't
-    // be reliably used with `wipe_gt_height_from_id_sorted_table`; therefore, we just maintain
-    // the `height` index if bulk load was restarted;
-    transaction.execute("DELETE FROM inputs WHERE height > $1;", &[&(height as i64)])?;
-    Ok(())
-}
-
-fn wipe_outputs_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
-    wipe_gt_height_from_id_sorted_table(transaction, "outputs", "id", height)
-}
-
-fn wipe_blocks_higher_than_height(transaction: &Transaction, height: BlockHeight) -> Result<()> {
-    wipe_gt_height_from_id_sorted_table(transaction, "blocks", "id", height)
-}
-
 type BlocksInFlight = HashSet<BlockHash>;
 
 /// Worker Pipepline
@@ -491,15 +433,15 @@ impl Pipeline {
 
                     let blocks_len = blocks.len();
 
-                    let mut insert_queries = create_bulk_insert_blocks_query(&blocks);
-                    let mut queries = vec![format!(
+                    let insert_queries = create_bulk_insert_blocks_query(&blocks);
+                    let reorg_queries = vec![format!(
                         "UPDATE blocks SET orphaned = true WHERE height >= {};",
                         min_block_height
                     )];
-                    queries.append(&mut insert_queries);
 
                     if mode.is_atomic() {
-                        pending_queries.push(queries);
+                        pending_queries.push(reorg_queries);
+                        pending_queries.push(insert_queries);
                     } else {
                         assert_eq!(next_id, read_next_block_id(&conn)?);
                         execute_bulk_insert_transcation(
@@ -507,7 +449,7 @@ impl Pipeline {
                             "blocks",
                             blocks.len(),
                             batch_id,
-                            queries.into_iter(),
+                            vec![reorg_queries, insert_queries].into_iter().flatten(),
                         )?;
                     }
 
@@ -800,13 +742,7 @@ impl Postresql {
         if self.bulk_mode {
             if let Some(height) = height {
                 info!("Deleting potentially inconsistent data from previous bulk run");
-                let transaction = self.connection.transaction()?;
-                transaction.execute("DELETE FROM blocks WHERE height > $1", &[&(height as i64)])?;
-                transaction.execute("DELETE FROM txs WHERE id IN (SELECT txs.id FROM txs LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.id IS NULL)", &[])?;
-                transaction.execute("DELETE FROM outputs WHERE id IN (SELECT outputs.id FROM outputs LEFT JOIN txs ON outputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
-                transaction.execute("DELETE FROM inputs WHERE output_id IN (SELECT inputs.output_id FROM inputs LEFT JOIN txs ON inputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
-                transaction.commit()?;
-                trace!("Deleted potentially inconsistent data from previous bulk run");
+                self.wipe_to_height(height)?;
             }
         }
 
@@ -927,9 +863,10 @@ impl DataStore for Postresql {
         Ok(())
     }
 
-    // TODO: semantics against things in flight are unclear
-    // Document.
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
+        if let Some(height) = self.cached_max_height {
+            return Ok(Some(height));
+        }
         self.cached_max_height = self
             .connection
             .query("SELECT height FROM blocks ORDER BY id DESC LIMIT 1", &[])?
@@ -971,52 +908,32 @@ impl DataStore for Postresql {
             }))
     }
 
-    // TODO: rename `wipe_at_height`?
-    fn reorg_at_height(&mut self, height: BlockHeight) -> Result<()> {
-        info!("Reorg detected at {}H", height);
-        // If we're doing reorgs, that means we have to be close to chainhead
-        // this will also flush the batch and workers
-        self.mode_normal()?;
-
-        let transaction = self.connection.transaction()?;
-        // Always start with removing `blocks` since that invalidates
-        // all other data in case of crash
-        transaction.execute("DELETE FROM blocks WHERE height >= $1", &[&(height as i64)])?;
-        transaction.execute("DELETE FROM txs WHERE height >= $1", &[&(height as i64)])?;
-        transaction.execute("DELETE FROM inputs WHERE height >= $1", &[&(height as i64)])?;
-        transaction.execute(
-            "DELETE FROM outputs WHERE height >= $1",
-            &[&(height as i64)],
-        )?;
-        transaction.commit()?;
-
-        self.cached_max_height = None;
-        Ok(())
-    }
-
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
         self.update_max_height(&info);
 
         self.batch_txs_total += info.block.txdata.len() as u64;
+        let height = info.height;
         self.batch.push(info);
-        if self.batch_txs_total > 100_000 {
+        if self.bulk_mode {
+            if self.batch_txs_total > 100_000 {
+                self.flush_batch()?;
+            }
+        } else if self.cached_max_height.expect("Already set") <= height {
             self.flush_batch()?;
         }
-        Ok(())
-    }
 
-    fn flush(&mut self) -> Result<()> {
-        self.flush_batch()?;
         Ok(())
     }
 
     fn wipe_to_height(&mut self, height: u64) -> Result<()> {
+        info!("Deleting data above {}H", height);
         let transaction = self.connection.transaction()?;
-        wipe_txs_higher_than_height(&transaction, height)?;
-        wipe_outputs_higher_than_height(&transaction, height)?;
-        wipe_inputs_higher_than_height(&transaction, height)?;
-        wipe_blocks_higher_than_height(&transaction, height)?;
+        transaction.execute("DELETE FROM blocks WHERE height > $1", &[&(height as i64)])?;
+        transaction.execute("DELETE FROM txs WHERE id IN (SELECT txs.id FROM txs LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.id IS NULL)", &[])?;
+        transaction.execute("DELETE FROM outputs WHERE id IN (SELECT outputs.id FROM outputs LEFT JOIN txs ON outputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+        transaction.execute("DELETE FROM inputs WHERE output_id IN (SELECT inputs.output_id FROM inputs LEFT JOIN txs ON inputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
         transaction.commit()?;
+        trace!("Deleted data above {}H", height);
         Ok(())
     }
 }
