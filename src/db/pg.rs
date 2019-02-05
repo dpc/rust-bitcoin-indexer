@@ -1,7 +1,7 @@
 use log::{debug, error, info, trace};
 
-use crate::db;
 use super::*;
+use crate::db;
 use crate::prelude::*;
 use dotenv::dotenv;
 use postgres::{Connection, TlsMode};
@@ -1013,9 +1013,13 @@ impl DataStore for Postresql {
     fn wipe_to_height(&mut self, height: u64) -> Result<()> {
         info!("Deleting data above {}H", height);
         let transaction = self.connection.transaction()?;
+        info!("Deleting blocks above {}H", height);
         transaction.execute("DELETE FROM blocks WHERE height > $1", &[&(height as i64)])?;
+        info!("Deleting txs above {}H", height);
         transaction.execute("DELETE FROM txs WHERE id IN (SELECT txs.id FROM txs LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.id IS NULL)", &[])?;
+        info!("Deleting outputs above {}H", height);
         transaction.execute("DELETE FROM outputs WHERE id IN (SELECT outputs.id FROM outputs LEFT JOIN txs ON outputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+        info!("Deleting inputs above {}H", height);
         transaction.execute("DELETE FROM inputs WHERE output_id IN (SELECT inputs.output_id FROM inputs LEFT JOIN txs ON inputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
         transaction.commit()?;
         trace!("Deleted data above {}H", height);

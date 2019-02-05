@@ -3,7 +3,7 @@ use log::info;
 use crate::prelude::*;
 use common_failures::prelude::*;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         self,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -66,7 +66,7 @@ pub struct Prefetcher {
     out_of_order_items: HashMap<BlockHeight, (BlockHash, BitcoinCoreBlock)>,
 
     cur_height: BlockHeight,
-    prev_hashes: HashMap<BlockHeight, BlockHash>,
+    prev_hashes: BTreeMap<BlockHeight, BlockHash>,
     workers_finish: Arc<AtomicBool>,
     thread_num: usize,
     rpc: Arc<bitcoincore_rpc::Client>,
@@ -82,7 +82,7 @@ impl Prefetcher {
         let workers_finish = Arc::new(AtomicBool::new(false));
 
         let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
-        let mut prev_hashes = HashMap::default();
+        let mut prev_hashes = BTreeMap::default();
         let start = if let Some(h_and_hash) = last_block {
             let h = h_and_hash.height;
             prev_hashes.insert(h, h_and_hash.hash);
@@ -169,11 +169,35 @@ impl Prefetcher {
                 if prev_hash != &item.hash {
                     return true;
                 }
+            } else if self.cur_height
+                < *self
+                    .prev_hashes
+                    .iter()
+                    .next()
+                    .expect("At least one element")
+                    .0
+            {
+                panic!(
+                    "Prefetcher detected a reorg beyond acceptable depth. No hash for {}H",
+                    self.cur_height
+                );
+            } else {
+                let max_prev_hash = self
+                    .prev_hashes
+                    .iter()
+                    .next_back()
+                    .expect("At least one element");
+                if self.cur_height != *max_prev_hash.0 + 1 {
+                    panic!(
+                        "No prev_hash for a new block {}H {}; max_prev_hash: {}H {}",
+                        self.cur_height, item.hash, max_prev_hash.0, max_prev_hash.1
+                    );
+                }
             }
         }
         self.prev_hashes.insert(item.height, item.hash);
         // this is how big reorgs we're going to detect
-        let window_size = 100;
+        let window_size = 1000;
         self.prev_hashes
             .remove(&(self.cur_height.saturating_sub(window_size)));
         assert!(self.prev_hashes.len() <= window_size as usize);
