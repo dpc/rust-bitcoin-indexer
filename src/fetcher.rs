@@ -34,7 +34,7 @@ impl Fetcher {
 }
 
 impl Iterator for Fetcher {
-    type Item = BlockInfo;
+    type Item = BlockCore;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.ended {

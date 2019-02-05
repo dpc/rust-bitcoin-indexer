@@ -31,7 +31,7 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     }
 }
 
-type PrefetcherItem = BlockInfo;
+type PrefetcherItem = BlockCore;
 
 /// An iterator that yields blocks
 ///
@@ -207,17 +207,17 @@ impl Iterator for Prefetcher {
 
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
-                let binfo = BlockInfo {
+                let block = BlockCore {
                     height: self.cur_height,
                     hash: item.0,
-                    block: item.1,
+                    data: item.1,
                 };
-                if self.detected_reorg(&binfo) {
+                if self.detected_reorg(&block) {
                     self.reset_on_reorg();
                     continue 'retry_on_reorg;
                 }
                 self.cur_height += 1;
-                return Some(binfo);
+                return Some(block);
             }
 
             loop {
@@ -237,7 +237,7 @@ impl Iterator for Prefetcher {
                 } else {
                     assert!(item.height > self.cur_height);
                     self.out_of_order_items
-                        .insert(item.height, (item.hash, item.block));
+                        .insert(item.height, (item.hash, item.data));
                 }
             }
         }
@@ -313,10 +313,10 @@ impl Worker {
     fn get_block_by_height(&mut self, height: BlockHeight) -> Result<PrefetcherItem> {
         let hash = self.rpc.get_block_hash(height)?;
         let block = self.rpc.get_by_id(&hash)?;
-        Ok(BlockInfo {
+        Ok(BlockCore {
             height,
             hash,
-            block,
+            data: block,
         })
     }
 }

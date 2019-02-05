@@ -27,11 +27,19 @@ pub type TxHash = Sha256dHash;
 pub type TxHex = String;
 pub type OutPoint = bitcoin::blockdata::transaction::OutPoint;
 
-pub struct BlockInfo {
+/// Data in a block
+///
+/// Comes associated with height and hash of the block.
+///
+/// `T` is type type of the data.
+pub struct Block<T> {
     pub height: BlockHeight,
     pub hash: BlockHash,
-    pub block: bitcoin_core::Block,
+    pub data: T,
 }
+
+/// Block data from BitcoinCore (`rust-bitcoin`)
+pub type BlockCore = Block<bitcoin_core::Block>;
 
 #[derive(Clone, Debug)]
 pub struct RpcInfo {

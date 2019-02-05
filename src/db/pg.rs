@@ -1,5 +1,6 @@
 use log::{debug, error, info, trace};
 
+use crate::db;
 use super::*;
 use crate::prelude::*;
 use dotenv::dotenv;
@@ -17,7 +18,7 @@ pub fn establish_connection() -> Result<Connection> {
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
-fn create_bulk_insert_blocks_query(blocks: &[Block]) -> Vec<String> {
+fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
     if blocks.is_empty() {
         return vec![];
     }
@@ -705,7 +706,7 @@ pub struct Postresql {
     connection: Connection,
     cached_max_height: Option<u64>,
     pipeline: Option<Pipeline>,
-    batch: Vec<BlockInfo>,
+    batch: Vec<crate::BlockCore>,
     batch_txs_total: u64,
     batch_id: u64,
     mode: Mode,
@@ -822,10 +823,10 @@ impl Postresql {
         self.start_workers();
     }
 
-    fn update_max_height(&mut self, info: &BlockInfo) {
+    fn update_max_height(&mut self, block: &crate::BlockCore) {
         self.cached_max_height = Some(
             self.cached_max_height
-                .map_or(info.height, |h| std::cmp::max(h, info.height)),
+                .map_or(block.height, |h| std::cmp::max(h, block.height)),
         );
     }
 
@@ -955,23 +956,23 @@ impl DataStore for Postresql {
             }))
     }
 
-    fn insert(&mut self, info: BlockInfo) -> Result<()> {
-        if let Some(db_hash) = self.get_hash_by_height(info.height)? {
-            if db_hash != info.hash {
+    fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
+        if let Some(db_hash) = self.get_hash_by_height(block.height)? {
+            if db_hash != block.hash {
                 // we move forward and there is a query in a inseting
                 // pipeline (`reorg_queries`)
                 // that will mark anything above and eq this hight as orphaned
                 info!(
                     "Node block != db block at {}H; {} != {} - reorg",
-                    info.height, info.hash, db_hash
+                    block.height, block.hash, db_hash
                 );
             } else {
                 // we already have exact same block, non-orphaned, and we don't want
                 // to add it twice
                 trace!(
                     "Skip indexing alredy included block {}H {}",
-                    info.height,
-                    info.hash
+                    block.height,
+                    block.hash
                 );
                 // if we're here, we must have not inserted anything yet,
                 // and these are prefetcher starting from some past blocks
@@ -981,18 +982,18 @@ impl DataStore for Postresql {
         } else {
             // we can only be inserting non-reorg blocks one height at a time
             if let Some(last_inserted_block_height) = self.last_inserted_block_height {
-                assert_eq!(info.height, last_inserted_block_height + 1);
+                assert_eq!(block.height, last_inserted_block_height + 1);
             }
         }
 
         self.num_inserted += 1;
-        self.last_inserted_block_height = Some(info.height);
+        self.last_inserted_block_height = Some(block.height);
 
-        self.update_max_height(&info);
+        self.update_max_height(&block);
 
-        self.batch_txs_total += info.block.txdata.len() as u64;
-        let height = info.height;
-        self.batch.push(info);
+        self.batch_txs_total += block.data.txdata.len() as u64;
+        let height = block.height;
+        self.batch.push(block);
 
         if self.mode.is_bulk() {
             if self.batch_txs_total > 100_000 {

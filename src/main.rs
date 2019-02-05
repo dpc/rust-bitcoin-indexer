@@ -35,13 +35,13 @@ impl Indexer {
         })
     }
 
-    fn process_block(&mut self, binfo: BlockInfo) -> Result<()> {
-        let block_height = binfo.height;
+    fn process_block(&mut self, block: BlockCore) -> Result<()> {
+        let block_height = block.height;
         if block_height >= self.node_starting_chainhead_height || block_height % 1000 == 0 {
-            eprintln!("Block {}H: {}", binfo.height, binfo.hash);
+            eprintln!("Block {}H: {}", block.height, block.hash);
         }
 
-        self.db.insert(binfo)?;
+        self.db.insert(block)?;
         Ok(())
     }
 

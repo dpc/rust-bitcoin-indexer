@@ -11,7 +11,7 @@ pub trait DataStore {
 
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
-    fn insert(&mut self, info: BlockInfo) -> Result<()>;
+    fn insert(&mut self, info: crate::BlockCore) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -24,13 +24,13 @@ struct Block {
 }
 
 impl Block {
-    pub fn from_core_block(info: &BlockInfo) -> Self {
+    pub fn from_core_block(block: &crate::BlockCore) -> Self {
         Block {
-            height: info.height,
-            hash: info.hash,
-            prev_hash: info.block.header.prev_blockhash,
-            merkle_root: info.block.header.merkle_root,
-            time: info.block.header.time,
+            height: block.height,
+            hash: block.hash,
+            prev_hash: block.data.header.prev_blockhash,
+            merkle_root: block.data.header.merkle_root,
+            time: block.data.header.time,
         }
     }
 }
@@ -43,7 +43,7 @@ struct Tx {
 
 impl Tx {
     pub fn from_core_block(
-        info: &BlockInfo,
+        info: &crate::BlockCore,
         tx_id: TxHash,
         tx: &bitcoin_core::Transaction,
     ) -> Self {
@@ -65,7 +65,7 @@ struct Output {
 
 impl Output {
     pub fn from_core_block(
-        _info: &BlockInfo,
+        _info: &crate::BlockCore,
         tx_id: TxHash,
         tx: &bitcoin_core::Transaction,
         idx: u32,
@@ -92,7 +92,11 @@ struct Input {
 }
 
 impl Input {
-    pub fn from_core_block(_info: &BlockInfo, tx_id: TxHash, tx_in: &bitcoin_core::TxIn) -> Self {
+    pub fn from_core_block(
+        _info: &crate::BlockCore,
+        tx_id: TxHash,
+        tx_in: &bitcoin_core::TxIn,
+    ) -> Self {
         Input {
             out_point: OutPoint {
                 txid: tx_in.previous_output.txid,
@@ -110,13 +114,13 @@ struct Parsed {
     pub inputs: Vec<Input>,
 }
 
-fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
+fn parse_node_block(block_core: &crate::BlockCore) -> Result<Parsed> {
     let mut outputs: Vec<Output> = vec![];
     let mut inputs: Vec<Input> = vec![];
     let mut txs: Vec<Tx> = vec![];
-    let block = Block::from_core_block(info);
+    let block = Block::from_core_block(block_core);
 
-    for tx in &info.block.txdata {
+    for tx in &block_core.data.txdata {
         let coinbase = tx.is_coin_base();
 
         let tx_id = if block.height == 91842 && coinbase {
@@ -130,21 +134,21 @@ fn parse_node_block(info: &BlockInfo) -> Result<Parsed> {
 
             TxHash::from_str("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
                 .unwrap()
-        } else if info.height == 91880 && coinbase {
+        } else if block_core.height == 91880 && coinbase {
             TxHash::from_str("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
                 .unwrap()
         } else {
             tx.txid()
         };
-        txs.push(Tx::from_core_block(info, tx_id, &tx));
+        txs.push(Tx::from_core_block(block_core, tx_id, &tx));
         for (idx, tx_out) in tx.output.iter().enumerate() {
             outputs.push(Output::from_core_block(
-                info, tx_id, &tx, idx as u32, tx_out,
+                block_core, tx_id, &tx, idx as u32, tx_out,
             ))
         }
         if !tx.is_coin_base() {
             for (_idx, tx_in) in tx.input.iter().enumerate() {
-                inputs.push(Input::from_core_block(info, tx_id, tx_in));
+                inputs.push(Input::from_core_block(block_core, tx_id, tx_in));
             }
         }
     }

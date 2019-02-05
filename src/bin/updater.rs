@@ -38,8 +38,8 @@ fn run() -> Result<()> {
             db.execute(
                 "UPDATE blocks SET time = $1, merkle_root = $2 WHERE hash = $3",
                 &[
-                    &(i64::from(item.block.header.time)),
-                    &reversed(item.block.header.merkle_root.to_bytes().to_vec()),
+                    &(i64::from(item.data.header.time)),
+                    &reversed(item.data.header.merkle_root.to_bytes().to_vec()),
                     &reversed(item.hash.to_bytes().to_vec()),
                 ],
             )?;

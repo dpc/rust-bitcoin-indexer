@@ -1,9 +1,10 @@
 use super::*;
+use crate::db;
 use common_failures::prelude::*;
 
 #[derive(Default)]
 pub struct MemDataStore {
-    blocks: BTreeMap<BlockHeight, Block>,
+    blocks: BTreeMap<BlockHeight, db::Block>,
     block_hashes: BTreeMap<BlockHeight, BlockHash>,
 }
 
@@ -16,9 +17,9 @@ impl DataStore for MemDataStore {
         Ok(self.block_hashes.get(&height).cloned())
     }
 
-    fn insert(&mut self, info: BlockInfo) -> Result<()> {
-        let parsed = super::parse_node_block(&info)?;
-        self.blocks.insert(info.height, parsed.block);
+    fn insert(&mut self, block: BlockCore) -> Result<()> {
+        let parsed = super::parse_node_block(&block)?;
+        self.blocks.insert(block.height, parsed.block);
         Ok(())
     }
 
