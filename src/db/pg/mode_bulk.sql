@@ -9,6 +9,23 @@ DROP INDEX IF EXISTS outputs_address_value;
 
 DROP INDEX IF EXISTS inputs_output_id;
 
+-- disable autovacum: we don't delete data anyway
+ALTER TABLE blocks SET (
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
+);
+
+ALTER TABLE txs SET (
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
+);
+
+ALTER TABLE outputs SET (
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
+);
+
+ALTER TABLE inputs SET (
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
+);
+
 ALTER TABLE blocks SET UNLOGGED;
 ALTER TABLE txs SET UNLOGGED;
 ALTER TABLE outputs SET UNLOGGED;

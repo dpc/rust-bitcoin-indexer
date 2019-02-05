@@ -8,18 +8,6 @@ pub struct MemDataStore {
 }
 
 impl DataStore for MemDataStore {
-    fn mode_fresh(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn mode_bulk(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn mode_normal(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn wipe_to_height(&mut self, _height: u64) -> Result<()> {
         Ok(())
     }

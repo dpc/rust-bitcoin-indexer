@@ -16,8 +16,9 @@ CREATE TABLE IF NOT EXISTS blocks (
 -- We always want these two, as a lot of logic is based
 -- on `blocks` table, and it's the smallest table overall,
 -- so it doesn't matter that much
-CREATE UNIQUE INDEX IF NOT EXISTS blocks_hash ON blocks (hash);
-CREATE UNIQUE INDEX IF NOT EXISTS blocks_height ON blocks (height);
+CREATE INDEX IF NOT EXISTS blocks_hash ON blocks (hash);
+CREATE INDEX IF NOT EXISTS blocks_height ON blocks (height);
+CREATE UNIQUE INDEX IF NOT EXISTS blocks_hash_not_orphaned ON blocks (hash) WHERE orphaned = false;
 
 CREATE TABLE IF NOT EXISTS txs (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
@@ -40,7 +41,7 @@ CREATE TABLE IF NOT EXISTS inputs (
   tx_id BIGINT NOT NULL -- tx id this input is from
 );
 
-
+-- create some views
 CREATE OR REPLACE VIEW address_balances AS
   SELECT address, SUM(
     CASE WHEN inputs.output_id IS NULL THEN value ELSE 0 END

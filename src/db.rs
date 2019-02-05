@@ -7,16 +7,6 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 pub trait DataStore {
-    /// Fresh start
-    fn mode_fresh(&mut self) -> Result<()>;
-
-    /// We will be adding a lot stuff
-    /// so go fast (eg. drop indices)
-    fn mode_bulk(&mut self) -> Result<()>;
-
-    /// We're at chain-head
-    fn mode_normal(&mut self) -> Result<()>;
-
     fn wipe_to_height(&mut self, height: u64) -> Result<()>;
 
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;

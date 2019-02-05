@@ -349,19 +349,48 @@ where
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum PipelineMode {
-    Atomic,
+enum Mode {
+    FreshBulk,
     Bulk,
+    Normal,
 }
 
-impl PipelineMode {
-    fn is_atomic(self) -> bool {
-        self == PipelineMode::Atomic
+impl Mode {
+    fn is_bulk(self) -> bool {
+        match self {
+            Mode::FreshBulk => true,
+            Mode::Bulk => true,
+            Mode::Normal => false,
+        }
+    }
+
+    fn is_not_fresh_bulk(self) -> bool {
+        match self {
+            Mode::FreshBulk => false,
+            Mode::Bulk => true,
+            Mode::Normal => false,
+        }
+    }
+
+    fn to_sql_query_str(self) -> &'static str {
+        match self {
+            Mode::FreshBulk => include_str!("pg/mode_fresh.sql"),
+            Mode::Bulk => include_str!("pg/mode_bulk.sql"),
+            Mode::Normal => include_str!("pg/mode_normal.sql"),
+        }
+    }
+
+    fn to_entering_str(self) -> &'static str {
+        match self {
+            Mode::FreshBulk => "fresh mode: no indices",
+            Mode::Bulk => "fresh mode: minimum indices",
+            Mode::Normal => "normal mode: all indices",
+        }
     }
 }
 
 impl Pipeline {
-    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: PipelineMode) -> Result<Self> {
+    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -439,7 +468,7 @@ impl Pipeline {
                         min_block_height
                     )];
 
-                    if mode.is_atomic() {
+                    if !mode.is_bulk() {
                         pending_queries.push(reorg_queries);
                         pending_queries.push(insert_queries);
                     } else {
@@ -490,7 +519,7 @@ impl Pipeline {
                 {
                     let queries = create_bulk_insert_txs_query(&txs, &block_ids);
 
-                    if mode.is_atomic() {
+                    if !mode.is_bulk() {
                         pending_queries.push(queries);
                     } else {
                         assert_eq!(next_id, read_next_tx_id(&conn)?);
@@ -543,7 +572,7 @@ impl Pipeline {
                 {
                     let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
 
-                    if mode.is_atomic() {
+                    if !mode.is_bulk() {
                         pending_queries.push(queries);
                     } else {
                         assert_eq!(next_id, read_next_output_id(&conn)?);
@@ -608,7 +637,7 @@ impl Pipeline {
                         max_block_height
                     ));
 
-                    if mode.is_atomic() {
+                    if mode.is_bulk() {
                         pending_queries.push(queries);
 
                         execute_bulk_insert_transcation(
@@ -679,9 +708,14 @@ pub struct Postresql {
     batch: Vec<BlockInfo>,
     batch_txs_total: u64,
     batch_id: u64,
-    bulk_mode: bool,
+    mode: Mode,
+    node_chain_head_height: BlockHeight,
 
     in_flight: Arc<Mutex<BlocksInFlight>>,
+
+    // for double checking logic here
+    last_inserted_block_height: Option<BlockHeight>,
+    num_inserted: u64,
 }
 
 impl Drop for Postresql {
@@ -691,10 +725,10 @@ impl Drop for Postresql {
 }
 
 impl Postresql {
-    pub fn new() -> Result<Self> {
+    pub fn new(node_chain_head_height: BlockHeight) -> Result<Self> {
         let connection = establish_connection()?;
         Self::init(&connection)?;
-        let (height, bulk_mode) = Self::read_indexer_state(&connection)?;
+        let (height, mode) = Self::read_indexer_state(&connection)?;
         let mut s = Postresql {
             connection,
             pipeline: None,
@@ -702,27 +736,48 @@ impl Postresql {
             batch: vec![],
             batch_txs_total: 0,
             batch_id: 0,
-            bulk_mode,
+            mode,
+            node_chain_head_height,
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
+            last_inserted_block_height: None,
+            num_inserted: 0,
         };
-        s.wipe_inconsistent_data(height)?;
+        if s.mode == Mode::FreshBulk {
+            s.self_test()?;
+        } else if s.mode == Mode::Bulk {
+            s.wipe_inconsistent_data(height)?;
+        }
         s.start_workers();
         Ok(s)
     }
 
-    fn read_indexer_state(conn: &Connection) -> Result<(Option<u64>, bool)> {
+    fn read_indexer_state(conn: &Connection) -> Result<(Option<u64>, Mode)> {
         let state = conn.query("SELECT bulk_mode, height FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
-            Ok((
-                state.get::<_, Option<i64>>(1).map(|h| h as u64),
-                state.get(0),
-            ))
+            let is_bulk_mode = state.get(0);
+            let mode = if is_bulk_mode {
+                let count = conn
+                    .query("SELECT COUNT(*) FROM BLOCKS", &[])?
+                    .into_iter()
+                    .next()
+                    .expect("A row from the db")
+                    .get::<_, i64>(0);
+                if count == 0 {
+                    Mode::FreshBulk
+                } else {
+                    Mode::Bulk
+                }
+            } else {
+                Mode::Normal
+            };
+
+            Ok((state.get::<_, Option<i64>>(1).map(|h| h as u64), mode))
         } else {
             conn.execute(
-                "INSERT INTO indexer_state (bulk_mode, height) VALUES (true, NULL)",
-                &[],
+                "INSERT INTO indexer_state (bulk_mode, height) VALUES ($1, NULL)",
+                &[&true],
             )?;
-            Ok((None, true))
+            Ok((None, Mode::FreshBulk))
         }
     }
 
@@ -739,7 +794,7 @@ impl Postresql {
     /// used as a commitment that everything else was inserted already..
     fn wipe_inconsistent_data(&mut self, height: Option<BlockHeight>) -> Result<()> {
         // there could be no inconsistent date outside of bulk mode
-        if self.bulk_mode {
+        if self.mode.is_not_fresh_bulk() {
             if let Some(height) = height {
                 info!("Deleting potentially inconsistent data from previous bulk run");
                 self.wipe_to_height(height)?;
@@ -759,17 +814,7 @@ impl Postresql {
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(
-            Pipeline::new(
-                self.in_flight.clone(),
-                if self.bulk_mode {
-                    PipelineMode::Bulk
-                } else {
-                    PipelineMode::Atomic
-                },
-            )
-            .unwrap(),
-        )
+        self.pipeline = Some(Pipeline::new(self.in_flight.clone(), self.mode).unwrap())
     }
 
     fn flush_workers(&mut self) {
@@ -825,45 +870,46 @@ impl Postresql {
         connection.batch_execute(include_str!("pg/wipe.sql"))?;
         Ok(())
     }
+
+    fn set_mode(&mut self, mode: Mode) -> Result<()> {
+        if self.mode == mode {
+            return Ok(());
+        }
+
+        self.set_mode_uncodintionally(mode)?;
+        Ok(())
+    }
+
+    fn set_mode_uncodintionally(&mut self, mode: Mode) -> Result<()> {
+        self.mode = mode;
+
+        info!("Entering {}", mode.to_entering_str());
+        self.flush_batch()?;
+        self.flush_workers();
+
+        self.connection.batch_execute(mode.to_sql_query_str())?;
+        // commit to the new mode in the db last
+        self.connection.execute(
+            "UPDATE indexer_state SET bulk_mode = $1",
+            &[&(mode.is_bulk())],
+        )?;
+        Ok(())
+    }
+
+    /// Switch between all modes to double-check all queries
+    fn self_test(&mut self) -> Result<()> {
+        assert_eq!(self.mode, Mode::FreshBulk);
+
+        self.set_mode_uncodintionally(Mode::FreshBulk)?;
+        self.set_mode_uncodintionally(Mode::Bulk)?;
+        self.set_mode_uncodintionally(Mode::Normal)?;
+        self.set_mode_uncodintionally(Mode::Bulk)?;
+        self.set_mode_uncodintionally(Mode::FreshBulk)?;
+        Ok(())
+    }
 }
 
 impl DataStore for Postresql {
-    fn mode_bulk(&mut self) -> Result<()> {
-        info!("Entering bulk mode: minimum indices");
-        if !self.bulk_mode {
-            self.bulk_mode = true;
-            self.flush_batch()?;
-            self.flush_workers();
-        }
-        self.connection
-            .batch_execute(include_str!("pg/mode_bulk.sql"))?;
-        Ok(())
-    }
-
-    fn mode_fresh(&mut self) -> Result<()> {
-        info!("Entering fresh mode: dropping all indices");
-        if !self.bulk_mode {
-            self.bulk_mode = true;
-            self.flush_batch()?;
-            self.flush_workers();
-        }
-        self.connection
-            .batch_execute(include_str!("pg/mode_fresh.sql"))?;
-        Ok(())
-    }
-
-    fn mode_normal(&mut self) -> Result<()> {
-        if self.bulk_mode {
-            self.bulk_mode = false;
-            self.flush_batch()?;
-            self.flush_workers();
-        }
-        info!("Entering normal mode: creating all indices");
-        self.connection
-            .batch_execute(include_str!("pg/mode_normal.sql"))?;
-        Ok(())
-    }
-
     fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
         if let Some(height) = self.cached_max_height {
             return Ok(Some(height));
@@ -897,7 +943,7 @@ impl DataStore for Postresql {
         Ok(self
             .connection
             .query(
-                "SELECT hash FROM blocks WHERE height = $1",
+                "SELECT hash FROM blocks WHERE height = $1 AND orphaned = false",
                 &[&(height as i64)],
             )?
             .iter()
@@ -910,17 +956,54 @@ impl DataStore for Postresql {
     }
 
     fn insert(&mut self, info: BlockInfo) -> Result<()> {
+        if let Some(db_hash) = self.get_hash_by_height(info.height)? {
+            if db_hash != info.hash {
+                // we move forward and there is a query in a inseting
+                // pipeline (`reorg_queries`)
+                // that will mark anything above and eq this hight as orphaned
+                info!(
+                    "Node block != db block at {}H; {} != {} - reorg",
+                    info.height, info.hash, db_hash
+                );
+            } else {
+                // we already have exact same block, non-orphaned, and we don't want
+                // to add it twice
+                trace!(
+                    "Skip indexing alredy included block {}H {}",
+                    info.height,
+                    info.hash
+                );
+                // if we're here, we must have not inserted anything yet,
+                // and these are prefetcher starting from some past blocks
+                assert_eq!(self.num_inserted, 0);
+                return Ok(());
+            }
+        } else {
+            // we can only be inserting non-reorg blocks one height at a time
+            if let Some(last_inserted_block_height) = self.last_inserted_block_height {
+                assert_eq!(info.height, last_inserted_block_height + 1);
+            }
+        }
+
+        self.num_inserted += 1;
+        self.last_inserted_block_height = Some(info.height);
+
         self.update_max_height(&info);
 
         self.batch_txs_total += info.block.txdata.len() as u64;
         let height = info.height;
         self.batch.push(info);
-        if self.bulk_mode {
+
+        if self.mode.is_bulk() {
             if self.batch_txs_total > 100_000 {
                 self.flush_batch()?;
             }
         } else if self.cached_max_height.expect("Already set") <= height {
             self.flush_batch()?;
+        }
+
+        if self.node_chain_head_height == height {
+            self.set_mode(Mode::Normal)?;
         }
 
         Ok(())

@@ -17,7 +17,7 @@ struct Indexer {
 }
 
 impl Indexer {
-    fn new(rpc_info: RpcInfo, db: impl db::DataStore + 'static) -> Result<Self> {
+    fn new(rpc_info: RpcInfo) -> Result<Self> {
         let rpc = bitcoincore_rpc::Client::new(
             rpc_info.url.clone(),
             rpc_info.user.clone(),
@@ -25,6 +25,7 @@ impl Indexer {
         );
         let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()?;
+        let mut db = db::pg::Postresql::new(node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {
@@ -40,23 +41,7 @@ impl Indexer {
             eprintln!("Block {}H: {}", binfo.height, binfo.hash);
         }
 
-        if let Some(db_hash) = self.db.get_hash_by_height(block_height)? {
-            if db_hash != binfo.hash {
-                info!(
-                    "Node block != db block at {}H; {} != {} - reorg",
-                    block_height, binfo.hash, db_hash
-                );
-                self.db.insert(binfo)?;
-            }
-        } else {
-            self.db.insert(binfo)?;
-            if block_height >= self.node_starting_chainhead_height {
-                if block_height == self.node_starting_chainhead_height {
-                    self.db.mode_normal()?;
-                }
-            }
-        }
-
+        self.db.insert(binfo)?;
         Ok(())
     }
 
@@ -65,12 +50,6 @@ impl Indexer {
             info!("Last indexed block {}H", last_indexed_height);
 
             assert!(last_indexed_height <= self.node_starting_chainhead_height);
-            let blocks_to_catch_up = self.node_starting_chainhead_height - last_indexed_height;
-            if blocks_to_catch_up <= self.node_starting_chainhead_height / 10 {
-                self.db.mode_normal()?;
-            } else {
-                self.db.mode_bulk()?;
-            }
             let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
             Some(BlockHeightAndHash {
                 height: start_from_block,
@@ -80,13 +59,6 @@ impl Indexer {
                     .expect("Block hash should be there"),
             })
         } else {
-            // test indices dropping and creation
-            self.db.mode_fresh()?;
-            self.db.mode_bulk()?;
-            self.db.mode_normal()?;
-            self.db.mode_bulk()?;
-            self.db.mode_fresh()?;
-
             None
         };
 
@@ -107,16 +79,14 @@ fn run() -> Result<()> {
         user: opts.node_rpc_user,
         password: opts.node_rpc_pass,
     };
-    //let mut db = db::mem::MemDataStore::default();
 
     if opts.wipe_db {
         db::pg::Postresql::wipe()?;
     } else if let Some(height) = opts.wipe_to_height {
-        let mut db = db::pg::Postresql::new()?;
-        db.wipe_to_height(height)?;
+        let mut indexer = Indexer::new(rpc_info)?;
+        indexer.db.wipe_to_height(height)?;
     } else {
-        let mut db = db::pg::Postresql::new()?;
-        let mut indexer = Indexer::new(rpc_info, db)?;
+        let mut indexer = Indexer::new(rpc_info)?;
         indexer.run()?;
     }
 
