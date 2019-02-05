@@ -23,7 +23,7 @@ impl DataStore for MemDataStore {
         Ok(())
     }
 
-    fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
+    fn get_head_height(&mut self) -> Result<Option<BlockHeight>> {
         Ok(self.blocks.keys().next_back().cloned())
     }
 }

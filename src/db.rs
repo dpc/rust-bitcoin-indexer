@@ -9,11 +9,19 @@ use std::str::FromStr;
 pub trait DataStore {
     fn wipe_to_height(&mut self, height: u64) -> Result<()>;
 
-    fn get_max_height(&mut self) -> Result<Option<BlockHeight>>;
+    /// Get the height of the stored chainhead
+    fn get_head_height(&mut self) -> Result<Option<BlockHeight>>;
+
+    /// Get hash of the stored block by height
+    ///
+    /// This will ignore any orphans
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>>;
+
+    /// Insert a new block: either extending current `head` or starting a reorg
     fn insert(&mut self, info: crate::BlockCore) -> Result<()>;
 }
 
+/// Block data to be stored in the db
 #[derive(Debug, Clone)]
 struct Block {
     pub height: BlockHeight,
@@ -34,6 +42,8 @@ impl Block {
         }
     }
 }
+
+/// Tx data to be stored in the db
 #[derive(Debug, Clone)]
 struct Tx {
     pub hash: TxHash,
@@ -55,6 +65,8 @@ impl Tx {
         }
     }
 }
+
+/// Output data to be stored in the db
 #[derive(Debug, Clone)]
 struct Output {
     pub out_point: OutPoint,
@@ -84,10 +96,13 @@ impl Output {
     }
 }
 
-/// Created when Output is spent, referencing it
+/// Input to be stored in the db
+///
+/// Created when Output is spent, referencing spent output by `out_point`
 #[derive(Debug, Clone)]
 struct Input {
     pub out_point: OutPoint,
+    /// Tx which includes the input (not to be mistaken by the `tx` which created the `out_point`
     pub tx_id: TxHash,
 }
 
@@ -107,6 +122,8 @@ impl Input {
     }
 }
 
+/// All data from the block, parsed to types reflecting what the db
+/// is actually storing.
 struct Parsed {
     pub block: Block,
     pub txs: Vec<Tx>,

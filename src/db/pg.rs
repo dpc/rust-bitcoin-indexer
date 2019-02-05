@@ -911,7 +911,7 @@ impl Postresql {
 }
 
 impl DataStore for Postresql {
-    fn get_max_height(&mut self) -> Result<Option<BlockHeight>> {
+    fn get_head_height(&mut self) -> Result<Option<BlockHeight>> {
         if let Some(height) = self.cached_max_height {
             return Ok(Some(height));
         }

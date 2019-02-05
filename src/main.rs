@@ -46,7 +46,7 @@ impl Indexer {
     }
 
     fn run(&mut self) -> Result<()> {
-        let start = if let Some(last_indexed_height) = self.db.get_max_height()? {
+        let start = if let Some(last_indexed_height) = self.db.get_head_height()? {
             info!("Last indexed block {}H", last_indexed_height);
 
             assert!(last_indexed_height <= self.node_starting_chainhead_height);
