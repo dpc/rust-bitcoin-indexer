@@ -1,4 +1,4 @@
-use crate::{prefetcher, prelude::*};
+use crate::{prefetcher, prelude::*, Rpc};
 use std::sync::Arc;
 
 use common_failures::prelude::*;
@@ -7,20 +7,29 @@ use common_failures::prelude::*;
 ///
 /// Fetcher builds on top of `Prefetcher``, addining ability
 /// to start end  finish at a given height
-pub struct Fetcher {
+pub struct Fetcher<R>
+where
+    R: Rpc,
+{
     cached_node_block_count: Option<u64>,
-    prefetcher: prefetcher::Prefetcher,
-    rpc: Arc<bitcoincore_rpc::Client>,
+    prefetcher: prefetcher::Prefetcher<R>,
+    rpc: Arc<R>,
     ended: bool,
     end: Option<BlockHeight>,
 }
 
-impl Fetcher {
+impl<R> Fetcher<R>
+where
+    R: Rpc + Sync + 'static,
+{
     pub fn new(
-        rpc: Arc<bitcoincore_rpc::Client>,
-        start: Option<BlockHeightAndHash>,
+        rpc: Arc<R>,
+        start: Option<Block<(), R::Id>>,
         end: Option<BlockHeight>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        R: Rpc,
+    {
         let prefetcher = prefetcher::Prefetcher::new(rpc.clone(), start)?;
 
         Ok(Fetcher {
@@ -33,8 +42,11 @@ impl Fetcher {
     }
 }
 
-impl Iterator for Fetcher {
-    type Item = BlockCore;
+impl<R> Iterator for Fetcher<R>
+where
+    R: Rpc + 'static,
+{
+    type Item = Block<R::Data, R::Id>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.ended {

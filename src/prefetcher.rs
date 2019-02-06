@@ -1,6 +1,7 @@
 use log::info;
 
 use crate::prelude::*;
+use crate::Rpc;
 use common_failures::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -31,7 +32,22 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     }
 }
 
-type PrefetcherItem = BlockCore;
+impl Rpc for bitcoincore_rpc::Client {
+    type Data = bitcoin::blockdata::block::Block;
+    type Id = bitcoin::util::hash::Sha256dHash;
+
+    fn get_block_count(&self) -> Result<u64> {
+        Ok(self.get_block_count()?)
+    }
+
+    fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Self::Id> {
+        Ok(self.get_block_hash(height)?)
+    }
+
+    fn get_block_by_id(&self, hash: &Self::Id) -> Result<Self::Data> {
+        Ok(self.get_by_id(hash)?)
+    }
+}
 
 /// An iterator that yields blocks
 ///
@@ -57,27 +73,30 @@ type PrefetcherItem = BlockCore;
 /// In a sense, the `Prefetcher` is a simplest and smallest-possible
 /// `Indexer`, that just does not actually index anything. It only
 /// fetches blocks and detects reorgs.
-pub struct Prefetcher {
-    rx: Option<crossbeam_channel::Receiver<PrefetcherItem>>,
+pub struct Prefetcher<R>
+where
+    R: Rpc,
+{
+    rx: Option<crossbeam_channel::Receiver<Block<R::Data, R::Id>>>,
     /// Worker threads
     thread_joins: Vec<std::thread::JoinHandle<()>>,
     /// List of blocks that arrived out-of-order: before the block
     /// we were actually waiting for.
-    out_of_order_items: HashMap<BlockHeight, (BlockHash, BitcoinCoreBlock)>,
+    out_of_order_items: HashMap<BlockHeight, Block<R::Data, R::Id>>,
 
     cur_height: BlockHeight,
-    prev_hashes: BTreeMap<BlockHeight, BlockHash>,
+    prev_hashes: BTreeMap<BlockHeight, R::Id>,
     workers_finish: Arc<AtomicBool>,
     thread_num: usize,
-    rpc: Arc<bitcoincore_rpc::Client>,
+    rpc: Arc<R>,
     end_of_fast_sync: u64,
 }
 
-impl Prefetcher {
-    pub fn new(
-        rpc: Arc<bitcoincore_rpc::Client>,
-        last_block: Option<BlockHeightAndHash>,
-    ) -> Result<Self> {
+impl<R> Prefetcher<R>
+where
+    R: Rpc + 'static,
+{
+    pub fn new(rpc: Arc<R>, last_block: Option<Block<(), R::Id>>) -> Result<Self> {
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
@@ -107,21 +126,6 @@ impl Prefetcher {
 
         s.start_workers();
         Ok(s)
-    }
-
-    fn stop_workers(&mut self) {
-        self.workers_finish.store(true, Ordering::SeqCst);
-
-        while let Ok(_) = self
-            .rx
-            .as_ref()
-            .expect("start_workers called before stop_workers")
-            .recv()
-        {}
-
-        self.rx = None;
-        self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
-        self.out_of_order_items.clear();
     }
 
     fn start_workers(&mut self) {
@@ -163,7 +167,7 @@ impl Prefetcher {
     /// Track previous hashes and detect if a given block points
     /// to a different `prev_blockhash` than we recorded. That
     /// means that the previous hash we've recorded was abandoned.
-    fn detected_reorg(&mut self, item: &PrefetcherItem) -> bool {
+    fn detected_reorg(&mut self, item: &Block<R::Data, R::Id>) -> bool {
         if self.cur_height > 0 {
             if let Some(prev_hash) = self.prev_hashes.get(&(self.cur_height)) {
                 if prev_hash != &item.hash {
@@ -195,7 +199,8 @@ impl Prefetcher {
                 }
             }
         }
-        self.prev_hashes.insert(item.height, item.hash);
+        let height = item.height;
+        self.prev_hashes.insert(height, item.hash.clone());
         // this is how big reorgs we're going to detect
         let window_size = 1000;
         self.prev_hashes
@@ -219,8 +224,31 @@ impl Prefetcher {
     }
 }
 
-impl Iterator for Prefetcher {
-    type Item = PrefetcherItem;
+impl<R> Prefetcher<R>
+where
+    R: Rpc,
+{
+    fn stop_workers(&mut self) {
+        self.workers_finish.store(true, Ordering::SeqCst);
+
+        while let Ok(_) = self
+            .rx
+            .as_ref()
+            .expect("start_workers called before stop_workers")
+            .recv()
+        {}
+
+        self.rx = None;
+        self.thread_joins.drain(..).map(|j| j.join()).for_each(drop);
+        self.out_of_order_items.clear();
+    }
+}
+
+impl<R> Iterator for Prefetcher<R>
+where
+    R: Rpc + 'static,
+{
+    type Item = Block<R::Data, R::Id>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_of_fast_sync == self.cur_height {
             println!("End of fast sync at {}H", self.cur_height);
@@ -231,17 +259,12 @@ impl Iterator for Prefetcher {
 
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
-                let block = BlockCore {
-                    height: self.cur_height,
-                    hash: item.0,
-                    data: item.1,
-                };
-                if self.detected_reorg(&block) {
+                if self.detected_reorg(&item) {
                     self.reset_on_reorg();
                     continue 'retry_on_reorg;
                 }
                 self.cur_height += 1;
-                return Some(block);
+                return Some(item);
             }
 
             loop {
@@ -260,31 +283,39 @@ impl Iterator for Prefetcher {
                     return Some(item);
                 } else {
                     assert!(item.height > self.cur_height);
-                    self.out_of_order_items
-                        .insert(item.height, (item.hash, item.data));
+                    self.out_of_order_items.insert(item.height, item);
                 }
             }
         }
     }
 }
 
-impl Drop for Prefetcher {
+impl<R> Drop for Prefetcher<R>
+where
+    R: Rpc,
+{
     fn drop(&mut self) {
         self.stop_workers();
     }
 }
 
 /// One worker thread, polling for data from the node
-struct Worker {
-    rpc: Arc<bitcoincore_rpc::Client>,
+struct Worker<R>
+where
+    R: Rpc,
+{
+    rpc: Arc<R>,
     next_height: Arc<AtomicUsize>,
     retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
-    tx: crossbeam_channel::Sender<PrefetcherItem>,
+    tx: crossbeam_channel::Sender<Block<R::Data, R::Id>>,
     retry_count: usize,
 }
 
-impl Worker {
+impl<R> Worker<R>
+where
+    R: Rpc,
+{
     fn run(&mut self) {
         while !self.workers_finish.load(Ordering::SeqCst) {
             let height = self
@@ -334,10 +365,10 @@ impl Worker {
         self.next_height.fetch_add(1, Ordering::SeqCst) as u64
     }
 
-    fn get_block_by_height(&mut self, height: BlockHeight) -> Result<PrefetcherItem> {
-        let hash = self.rpc.get_block_hash(height)?;
-        let block = self.rpc.get_by_id(&hash)?;
-        Ok(BlockCore {
+    fn get_block_by_height(&mut self, height: BlockHeight) -> Result<Block<R::Data, R::Id>> {
+        let hash = self.rpc.get_block_id_by_height(height)?;
+        let block = self.rpc.get_block_by_id(&hash)?;
+        Ok(Block {
             height,
             hash,
             data: block,
