@@ -8,7 +8,7 @@ pub mod utils;
 pub use prelude::{Block, BlockCore};
 
 use common_failures::prelude::*;
-use std::fmt::{Display, Debug};
+use std::fmt::{Debug, Display};
 
 /// An minimum interface for node rpc that prefetcher can work with
 pub trait Rpc: Send + Sync {
@@ -18,7 +18,7 @@ pub trait Rpc: Send + Sync {
 
     fn get_block_count(&self) -> Result<u64>;
 
-    fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Self::Id>;
+    fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Option<Self::Id>>;
 
     /// Get the block by height, along with hash to previous block
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>>;

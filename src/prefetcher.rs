@@ -41,8 +41,17 @@ impl Rpc for bitcoincore_rpc::Client {
         Ok(self.get_block_count()?)
     }
 
-    fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Self::Id> {
-        Ok(self.get_block_hash(height)?)
+    fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {
+        match self.get_block_hash(height) {
+            Err(e) => {
+                if e.to_string().contains("Block height out of range") {
+                    return Ok(None);
+                } else {
+                    return Err(e.into());
+                }
+            }
+            Ok(o) => Ok(Some(o)),
+        }
     }
 
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>> {
@@ -211,6 +220,9 @@ where
                     .next_back()
                     .expect("At least one element");
                 if self.cur_height != *max_prev_hash.0 + 1 {
+                    for (h, hash) in self.prev_hashes.iter() {
+                        debug!("prev_hash {}H -> {}", h, hash);
+                    }
                     panic!(
                         "No prev_hash for a new block {}H {}; max_prev_hash: {}H {}",
                         self.cur_height, current.hash, max_prev_hash.0, max_prev_hash.1
@@ -237,6 +249,11 @@ where
     ///
     /// This doesn't have to be blazing fast, so it isn't.
     fn reset_on_reorg(&mut self) {
+        info!(
+            "Resetting on reorg from {}H to {}H",
+            self.cur_height,
+            self.cur_height - 1
+        );
         self.stop_workers();
         assert!(self.cur_height > 0);
         self.cur_height -= 1;
@@ -404,16 +421,19 @@ where
         &mut self,
         height: BlockHeight,
     ) -> Result<Option<(Block<R::Data, R::Id>, R::Id)>> {
-        let hash = self.rpc.get_block_id_by_height(height)?;
-        Ok(self.rpc.get_block_by_id(&hash)?.map(|block| {
-            (
-                Block {
-                    height,
-                    hash,
-                    data: block.0,
-                },
-                block.1,
-            )
-        }))
+        if let Some(hash) = self.rpc.get_block_id_by_height(height)? {
+            Ok(self.rpc.get_block_by_id(&hash)?.map(|block| {
+                (
+                    Block {
+                        height,
+                        hash,
+                        data: block.0,
+                    },
+                    block.1,
+                )
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }

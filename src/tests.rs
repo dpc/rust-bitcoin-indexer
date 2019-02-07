@@ -135,6 +135,7 @@ impl TestRpc {
 }
 
 const ID_HEIGHT_OFFSET: usize = 3;
+
 impl Rpc for TestRpc {
     type Data = usize;
     type Id = usize;
@@ -147,20 +148,36 @@ impl Rpc for TestRpc {
         Ok(inner.chain.len().saturating_sub(1) as u64)
     }
 
-    fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Self::Id> {
-        Ok(height as usize + ID_HEIGHT_OFFSET)
+    fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Option<Self::Id>> {
+        let inner = self.inner.lock().unwrap();
+        let res = inner
+            .chain
+            .get(height as usize)
+            .map(|data| data + ID_HEIGHT_OFFSET);
+
+        if res.is_none() {
+            drop(inner);
+            self.maybe_change_state();
+        }
+        Ok(res)
     }
 
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>> {
-        let height = hash - ID_HEIGHT_OFFSET;
+        let needed_data = hash - ID_HEIGHT_OFFSET;
         let inner = self.inner.lock().unwrap();
-        if inner.chain.len() <= height {
+        if let Some((height, data)) = inner
+            .chain
+            .iter()
+            .enumerate()
+            .find(|(_height, data)| **data == needed_data)
+        {
+            let prev_data = inner.chain[height.saturating_sub(1)];
+            Ok(Some((*data, prev_data + ID_HEIGHT_OFFSET)))
+        } else {
             drop(inner);
             self.maybe_change_state();
-            return Ok(None);
+            Ok(None)
         }
-        let data = inner.chain[height as usize];
-        Ok(Some((data, height + ID_HEIGHT_OFFSET - 1)))
     }
 }
 
@@ -200,6 +217,7 @@ fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_seed: Vec<(u8, u8, u8)
         let prefetcher_starting_height = u64::from(start.saturating_sub(16));
         let prefetcher_starting_id = rpc
             .get_block_id_by_height(prefetcher_starting_height)
+            .unwrap()
             .unwrap();
 
         Block {
