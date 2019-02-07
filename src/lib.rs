@@ -8,12 +8,12 @@ pub mod utils;
 pub use prelude::{Block, BlockCore};
 
 use common_failures::prelude::*;
-use std::fmt::Display;
+use std::fmt::{Display, Debug};
 
 /// An minimum interface for node rpc that prefetcher can work with
 pub trait Rpc: Send + Sync {
     type Data: Send;
-    type Id: Send + Eq + PartialEq + Display + Clone;
+    type Id: Send + Eq + PartialEq + Display + Debug + Clone;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64;
 
     fn get_block_count(&self) -> Result<u64>;

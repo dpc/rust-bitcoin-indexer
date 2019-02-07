@@ -182,6 +182,12 @@ where
     fn track_reorgs(&mut self, current: &Block<R::Data, R::Id>, prev_id: R::Id) -> bool {
         debug_assert_eq!(current.height, self.cur_height);
         if self.cur_height > 0 {
+            debug!(
+                "Reorg check: stored {:?} =? given {} at {}H",
+                self.prev_hashes.get(&(self.cur_height - 1)),
+                prev_id,
+                self.cur_height - 1
+            );
             if let Some(stored_prev_id) = self.prev_hashes.get(&(self.cur_height - 1)) {
                 if stored_prev_id != &prev_id {
                     return true;

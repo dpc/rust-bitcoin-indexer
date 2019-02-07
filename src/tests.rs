@@ -26,7 +26,7 @@ struct ReorgParams {
 }
 
 impl ReorgParams {
-    fn is_done(&self) -> bool {
+    fn is_done(self) -> bool {
         self.delay == 0 && self.depth == 0 && self.add == 0
     }
 }
@@ -50,13 +50,13 @@ struct TestRpc {
 }
 
 impl TestRpc {
-    fn new(start: Option<u8>, reorgs_base: Vec<u32>) -> Self {
+    fn new(start: Option<u8>, reorgs_base: Vec<(u8, u8, u8)>) -> Self {
         let reorgs: Vec<_> = reorgs_base
             .into_iter()
             .map(|n| ReorgParams {
-                delay: (n & 0xff) as u8,
-                depth: ((n >> 8) & 0xff) as u8,
-                add: (((n >> 16) + 1) & 0xff) as u8,
+                delay: n.0,
+                depth: n.1,
+                add: n.2 + 1,
             })
             .collect();
 
@@ -164,14 +164,34 @@ impl Rpc for TestRpc {
     }
 }
 
+#[test]
+fn prefetcher_reorg_reliability_fixed() {
+    env_logger::init();
+    for (start, reorgs_seed) in vec![
+        (None, vec![(0, 1, 0), (0, 0, 0), (40, 69, 70)]),
+        (None, vec![(0, 1, 0), (1, 56, 84)]),
+    ] {
+        assert!(prefetcher_reorg_reliability(start, reorgs_seed));
+    }
+}
+
 #[quickcheck]
-fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_params: Vec<u32>) -> bool {
+fn prefetcher_reorg_reliability_quickcheck(
+    start: Option<u8>,
+    reorgs_seed: Vec<(u8, u8, u8)>,
+) -> bool {
+    prefetcher_reorg_reliability(start, reorgs_seed)
+}
+
+fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_seed: Vec<(u8, u8, u8)>) -> bool {
     info!(
         "Prefetcher reliability; start {:?}H; reorgs_params.len() == {}",
         start,
-        reorgs_params.len()
+        reorgs_seed.len()
     );
-    let rpc = Arc::new(TestRpc::new(start, reorgs_params));
+    debug!("reorgs_seed: {:?}", reorgs_seed);
+
+    let rpc = Arc::new(TestRpc::new(start, reorgs_seed));
     let mut chain = rpc.get_current_chain();
     let pending_reorgs_on_start = rpc.get_current_pending_reorgs();
     debug!("starting chain: {:?}", chain);
@@ -193,8 +213,8 @@ fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_params: Vec<u32>) -> b
 
     loop {
         let intern_chain = rpc.get_current_chain();
-        debug!("intern: {:?}", chain);
-        debug!("extern: {:?}", intern_chain);
+        debug!("intern: {:?}", intern_chain);
+        debug!("extern: {:?}", chain);
         if rpc.is_done() {
             // needs to be re-read after `is_done` is checked
             let intern_chain = rpc.get_current_chain();
@@ -219,6 +239,10 @@ fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_params: Vec<u32>) -> b
     }
 
     let rpc_chain = rpc.get_current_chain();
-    println!("chain: {:?}, rpc_chain: {:?}", chain, rpc_chain);
+    println!("intern chain: {:?}", rpc_chain);
+    println!("extern chain: {:?}", chain);
+    if chain != rpc_chain {
+        println!("Not equal!");
+    }
     chain == rpc_chain
 }
