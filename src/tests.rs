@@ -49,7 +49,7 @@ impl TestRpc {
         let reorgs: Vec<_> = reorgs_base
             .into_iter()
             .map(|n| ReorgParams {
-                delay: n.0,
+                delay: n.0 % 8,
                 depth: n.1,
                 add: n.2 + 1,
             })
@@ -104,7 +104,7 @@ impl TestRpc {
 
             if reorg.delay != 0 {
                 trace!("Delay");
-                reorg.delay = 0;
+                reorg.delay -= 1;
                 inner.current_reorg = Some(reorg);
             } else {
                 debug!(
