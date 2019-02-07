@@ -14,7 +14,15 @@ use std::fmt::Display;
 pub trait Rpc: Send + Sync {
     type Data: Send;
     type Id: Send + Eq + PartialEq + Display + Clone;
+    const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64;
+
     fn get_block_count(&self) -> Result<u64>;
+
     fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Self::Id>;
-    fn get_block_by_id(&self, hash: &Self::Id) -> Result<Self::Data>;
+
+    /// Get the block by height, along with hash to previous block
+    fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>>;
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,4 +1,4 @@
-use log::info;
+use log::{debug, info, trace};
 
 use crate::prelude::*;
 use crate::Rpc;
@@ -14,7 +14,7 @@ use std::{
 };
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
-    let delay_ms = 1000;
+    let delay_ms = 100;
     let mut count = 0;
     loop {
         match f() {
@@ -33,8 +33,9 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
 }
 
 impl Rpc for bitcoincore_rpc::Client {
-    type Data = bitcoin::blockdata::block::Block;
+    type Data = bitcoin::Block;
     type Id = bitcoin::util::hash::Sha256dHash;
+    const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 1000;
 
     fn get_block_count(&self) -> Result<u64> {
         Ok(self.get_block_count()?)
@@ -44,8 +45,19 @@ impl Rpc for bitcoincore_rpc::Client {
         Ok(self.get_block_hash(height)?)
     }
 
-    fn get_block_by_id(&self, hash: &Self::Id) -> Result<Self::Data> {
-        Ok(self.get_by_id(hash)?)
+    fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>> {
+        let block: bitcoin::Block = match self.get_by_id(hash) {
+            Err(e) => {
+                if e.to_string().contains("Block height out of range") {
+                    return Ok(None);
+                } else {
+                    return Err(e.into());
+                }
+            }
+            Ok(o) => o,
+        };
+        let prev_id = block.header.prev_blockhash;
+        Ok(Some((block, prev_id)))
     }
 }
 
@@ -77,12 +89,12 @@ pub struct Prefetcher<R>
 where
     R: Rpc,
 {
-    rx: Option<crossbeam_channel::Receiver<Block<R::Data, R::Id>>>,
+    rx: Option<crossbeam_channel::Receiver<(Block<R::Data, R::Id>, R::Id)>>,
     /// Worker threads
     thread_joins: Vec<std::thread::JoinHandle<()>>,
     /// List of blocks that arrived out-of-order: before the block
     /// we were actually waiting for.
-    out_of_order_items: HashMap<BlockHeight, Block<R::Data, R::Id>>,
+    out_of_order_items: HashMap<BlockHeight, (Block<R::Data, R::Id>, R::Id)>,
 
     cur_height: BlockHeight,
     prev_hashes: BTreeMap<BlockHeight, R::Id>,
@@ -167,10 +179,11 @@ where
     /// Track previous hashes and detect if a given block points
     /// to a different `prev_blockhash` than we recorded. That
     /// means that the previous hash we've recorded was abandoned.
-    fn detected_reorg(&mut self, item: &Block<R::Data, R::Id>) -> bool {
+    fn track_reorgs(&mut self, current: &Block<R::Data, R::Id>, prev_id: R::Id) -> bool {
+        debug_assert_eq!(current.height, self.cur_height);
         if self.cur_height > 0 {
-            if let Some(prev_hash) = self.prev_hashes.get(&(self.cur_height)) {
-                if prev_hash != &item.hash {
+            if let Some(stored_prev_id) = self.prev_hashes.get(&(self.cur_height - 1)) {
+                if stored_prev_id != &prev_id {
                     return true;
                 }
             } else if self.cur_height
@@ -194,17 +207,18 @@ where
                 if self.cur_height != *max_prev_hash.0 + 1 {
                     panic!(
                         "No prev_hash for a new block {}H {}; max_prev_hash: {}H {}",
-                        self.cur_height, item.hash, max_prev_hash.0, max_prev_hash.1
+                        self.cur_height, current.hash, max_prev_hash.0, max_prev_hash.1
                     );
                 }
             }
         }
-        let height = item.height;
-        self.prev_hashes.insert(height, item.hash.clone());
+        self.prev_hashes
+            .insert(current.height, current.hash.clone());
         // this is how big reorgs we're going to detect
         let window_size = 1000;
-        self.prev_hashes
-            .remove(&(self.cur_height.saturating_sub(window_size)));
+        if self.cur_height >= window_size {
+            self.prev_hashes.remove(&(self.cur_height - window_size));
+        }
         assert!(self.prev_hashes.len() <= window_size as usize);
 
         false
@@ -251,7 +265,10 @@ where
     type Item = Block<R::Data, R::Id>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_of_fast_sync == self.cur_height {
-            println!("End of fast sync at {}H", self.cur_height);
+            debug!(
+                "Prefetcher: end of fast sync at {}H; switching to one worker",
+                self.cur_height
+            );
             self.stop_workers();
             self.thread_num = 1;
             self.start_workers();
@@ -259,31 +276,36 @@ where
 
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
-                if self.detected_reorg(&item) {
+                if self.track_reorgs(&item.0, item.1) {
                     self.reset_on_reorg();
                     continue 'retry_on_reorg;
                 }
                 self.cur_height += 1;
-                return Some(item);
+                return Some(item.0);
             }
 
             loop {
+                debug!(
+                    "Waiting for the block from the workers at: {}H",
+                    self.cur_height
+                );
                 let item = self
                     .rx
                     .as_ref()
                     .expect("rx available")
                     .recv()
                     .expect("Workers shouldn't disconnect");
-                if item.height == self.cur_height {
-                    if self.detected_reorg(&item) {
+                debug!("Got the block from the workers from: {}H", item.0.height);
+                if item.0.height == self.cur_height {
+                    if self.track_reorgs(&item.0, item.1) {
                         self.reset_on_reorg();
                         continue 'retry_on_reorg;
                     }
                     self.cur_height += 1;
-                    return Some(item);
+                    return Some(item.0);
                 } else {
-                    assert!(item.height > self.cur_height);
-                    self.out_of_order_items.insert(item.height, item);
+                    assert!(item.0.height > self.cur_height);
+                    self.out_of_order_items.insert(item.0.height, item);
                 }
             }
         }
@@ -308,7 +330,7 @@ where
     next_height: Arc<AtomicUsize>,
     retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
-    tx: crossbeam_channel::Sender<Block<R::Data, R::Id>>,
+    tx: crossbeam_channel::Sender<(Block<R::Data, R::Id>, R::Id)>,
     retry_count: usize,
 }
 
@@ -325,19 +347,26 @@ where
             match self.get_block_by_height(height) {
                 Err(e) => {
                     self.insert_into_retry_set(height);
-                    if e.to_string().contains("Block height out of range") {
-                        std::thread::sleep(Duration::from_secs(1));
-                    } else {
-                        std::thread::sleep(Duration::from_millis(
-                            self.retry_count as u64 * 1000 + 100,
-                        ));
-                        self.retry_count += 1;
-                        if self.retry_count % 5 == 0 {
-                            eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
-                        }
+                    trace!("Error from the node: {}", e);
+                    std::thread::sleep(Duration::from_millis(self.retry_count as u64 * 1000 + 100));
+                    self.retry_count += 1;
+                    if self.retry_count % 5 == 0 {
+                        eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
+
+                        debug!("DELME; ERROR {} at {}", e, height,);
                     }
                 }
-                Ok(item) => {
+                Ok(None) => {
+                    self.insert_into_retry_set(height);
+                    let sleep_ms = R::RECOMMENDED_HEAD_RETRY_DELAY_MS;
+                    self.retry_count += 1;
+                    if self.retry_count >= 10000 {
+                        debug!("DELME; Ahead of the chain head at {}", height);
+                        std::thread::sleep(Duration::from_millis(sleep_ms * 10000));
+                    }
+                    std::thread::sleep(Duration::from_millis(sleep_ms));
+                }
+                Ok(Some(item)) => {
                     self.retry_count = 0;
                     self.tx.send(item).expect("Send must not fail");
                 }
@@ -365,13 +394,20 @@ where
         self.next_height.fetch_add(1, Ordering::SeqCst) as u64
     }
 
-    fn get_block_by_height(&mut self, height: BlockHeight) -> Result<Block<R::Data, R::Id>> {
+    fn get_block_by_height(
+        &mut self,
+        height: BlockHeight,
+    ) -> Result<Option<(Block<R::Data, R::Id>, R::Id)>> {
         let hash = self.rpc.get_block_id_by_height(height)?;
-        let block = self.rpc.get_block_by_id(&hash)?;
-        Ok(Block {
-            height,
-            hash,
-            data: block,
-        })
+        Ok(self.rpc.get_block_by_id(&hash)?.map(|block| {
+            (
+                Block {
+                    height,
+                    hash,
+                    data: block.0,
+                },
+                block.1,
+            )
+        }))
     }
 }
