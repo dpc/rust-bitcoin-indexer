@@ -25,12 +25,7 @@ struct ReorgParams {
     add: u8,
 }
 
-impl ReorgParams {
-    fn is_done(self) -> bool {
-        self.delay == 0 && self.depth == 0 && self.add == 0
-    }
-}
-
+#[derive(Debug)]
 struct TestRpcInner {
     reorgs: Vec<ReorgParams>,
     current_reorg: Option<ReorgParams>,
@@ -96,9 +91,7 @@ impl TestRpc {
     fn maybe_change_state(&self) {
         let mut inner = self.inner.lock().unwrap();
 
-        if inner.current_reorg.map(|c| c.is_done()).unwrap_or(false) {
-            inner.current_reorg = None;
-        }
+        debug!("Maybe change state; inner: {:?}", *inner);
         if inner.current_reorg.is_none() {
             inner.current_reorg = inner.reorgs.pop();
             if let Some(current_reorg) = inner.current_reorg {
@@ -112,21 +105,22 @@ impl TestRpc {
             if reorg.delay != 0 {
                 trace!("Delay");
                 reorg.delay = 0;
+                inner.current_reorg = Some(reorg);
             } else {
-                trace!(
+                debug!(
                     "Doing a reorg of depth {} and then adding {}",
-                    reorg.depth,
-                    reorg.add
+                    reorg.depth, reorg.add
                 );
                 let new_chain_len = inner.chain.len().saturating_sub(reorg.depth as usize);
                 inner.chain.truncate(new_chain_len);
-                for _ in 0..reorg.depth + reorg.add {
+                for _ in 0..(u64::from(reorg.depth) + u64::from(reorg.add)) {
                     inner.mine_block()
                 }
-                reorg.depth = 0;
-                reorg.add = 0;
+
+                inner.current_reorg = None;
             }
-            inner.current_reorg = Some(reorg);
+
+            debug!("After maybe change state; inner: {:?}", *inner);
         } else {
             drop(inner);
             assert!(self.is_done());
@@ -183,7 +177,6 @@ impl Rpc for TestRpc {
 
 #[test]
 fn prefetcher_reorg_reliability_fixed() {
-    env_logger::init();
     for (start, reorgs_seed) in vec![
         (None, vec![(0, 1, 0), (0, 0, 0), (40, 69, 70)]),
         (None, vec![(0, 1, 0), (1, 56, 84)]),
@@ -200,21 +193,28 @@ fn prefetcher_reorg_reliability_quickcheck(
     prefetcher_reorg_reliability(start, reorgs_seed)
 }
 
-fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_seed: Vec<(u8, u8, u8)>) -> bool {
+fn prefetcher_reorg_reliability(start: Option<u8>, mut reorgs_seed: Vec<(u8, u8, u8)>) -> bool {
     info!(
         "Prefetcher reliability; start {:?}H; reorgs_params.len() == {}",
         start,
         reorgs_seed.len()
     );
+    reorgs_seed.truncate(32);
+
     debug!("reorgs_seed: {:?}", reorgs_seed);
 
     let rpc = Arc::new(TestRpc::new(start, reorgs_seed));
     let mut chain = rpc.get_current_chain();
     let pending_reorgs_on_start = rpc.get_current_pending_reorgs();
+
+    let window_size = pending_reorgs_on_start
+        .iter()
+        .fold(0u64, |sum, reorg| sum + u64::from(reorg.depth));
+
     debug!("starting chain: {:?}", chain);
 
     let start = start.map(|start| {
-        let prefetcher_starting_height = u64::from(start.saturating_sub(16));
+        let prefetcher_starting_height = u64::from(start).saturating_sub(window_size);
         let prefetcher_starting_id = rpc
             .get_block_id_by_height(prefetcher_starting_height)
             .unwrap()
@@ -231,8 +231,8 @@ fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_seed: Vec<(u8, u8, u8)
 
     loop {
         let intern_chain = rpc.get_current_chain();
-        debug!("intern: {:?}", intern_chain);
-        debug!("extern: {:?}", chain);
+        trace!("intern: {:?}", intern_chain);
+        trace!("extern: {:?}", chain);
         if rpc.is_done() {
             // needs to be re-read after `is_done` is checked
             let intern_chain = rpc.get_current_chain();
@@ -257,10 +257,5 @@ fn prefetcher_reorg_reliability(start: Option<u8>, reorgs_seed: Vec<(u8, u8, u8)
     }
 
     let rpc_chain = rpc.get_current_chain();
-    println!("intern chain: {:?}", rpc_chain);
-    println!("extern chain: {:?}", chain);
-    if chain != rpc_chain {
-        println!("Not equal!");
-    }
     chain == rpc_chain
 }

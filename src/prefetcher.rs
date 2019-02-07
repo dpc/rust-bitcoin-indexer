@@ -249,7 +249,7 @@ where
     ///
     /// This doesn't have to be blazing fast, so it isn't.
     fn reset_on_reorg(&mut self) {
-        info!(
+        debug!(
             "Resetting on reorg from {}H to {}H",
             self.cur_height,
             self.cur_height - 1
@@ -373,20 +373,13 @@ where
                     trace!("Error from the node: {}", e);
                     std::thread::sleep(Duration::from_millis(self.retry_count as u64 * 1000 + 100));
                     self.retry_count += 1;
-                    if self.retry_count % 5 == 0 {
-                        eprintln!("{} (retrying...)", e.display_causes_and_backtrace());
-
-                        debug!("DELME; ERROR {} at {}", e, height,);
+                    if self.retry_count % 10 == 0 {
+                        debug!("Worker retrying rpc error {} at {}H", e, height,);
                     }
                 }
                 Ok(None) => {
                     self.insert_into_retry_set(height);
                     let sleep_ms = R::RECOMMENDED_HEAD_RETRY_DELAY_MS;
-                    self.retry_count += 1;
-                    if self.retry_count >= 10000 {
-                        debug!("DELME; Ahead of the chain head at {}", height);
-                        std::thread::sleep(Duration::from_millis(sleep_ms * 10000));
-                    }
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                 }
                 Ok(Some(item)) => {
@@ -410,6 +403,7 @@ where
     fn insert_into_retry_set(&self, height: BlockHeight) {
         let mut set = self.retry_set.lock().unwrap();
         let not_present = set.insert(height);
+        drop(set);
         assert!(not_present);
     }
 
