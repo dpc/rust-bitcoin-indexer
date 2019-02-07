@@ -11,7 +11,7 @@ name = "bitcoincore_rpc"
 [dependencies]
 bitcoin = "0.16"
 bitcoin-bech32 = "*"
-bitcoincore-rpc = { version = "0.2", path = "../rust-bitcoincore-rpc/client" }
+bitcoincore-rpc = { version = "0.2", git = "https://github.com/dpc/rust-bitcoincore-rpc", branch = "0.2-release-fixes"}
 common_failures = "*"
 failure = "*"
 hex = "*"
