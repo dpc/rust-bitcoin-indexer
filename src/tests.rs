@@ -3,6 +3,12 @@ use log::{debug, info, trace};
 use quickcheck_macros::quickcheck;
 use std::sync::{Arc, Mutex};
 
+/// Insert new block (`height` + `data`) into a vector of blocks `chain`
+///
+/// This is to model using a `Vec` as a blockchain-datastructure:
+///
+/// * truncate the block if something is allready at `height` (reorg)
+/// * refuse (panic) to insert something higher then next empty `height`
 fn chain_insert(chain: &mut Vec<usize>, height: usize, data: usize) {
     if height < chain.len() {
         debug!("Truncating the chain from {} to {}", chain.len(), height);
@@ -18,28 +24,43 @@ fn chain_insert(chain: &mut Vec<usize>, height: usize, data: usize) {
     chain.push(data);
 }
 
+/// Paramters for a test reorg
 #[derive(Copy, Clone, Debug)]
 struct ReorgParams {
+    /// Down-counter before the reorg is happening
     delay: u8,
+    /// Num. of blocks to orphan
     depth: u8,
+    /// Num of blocks to add on top of blocks replacing the orphaned ones
     add: u8,
 }
 
+/// Synchronized inner-data of a `TestRpc`
 #[derive(Debug)]
 struct TestRpcInner {
+    /// Sequence of reorgs to perform
     reorgs: Vec<ReorgParams>,
+    /// Currently pending reorg
     current_reorg: Option<ReorgParams>,
+    /// State of the blockchain
     chain: Vec<usize>,
+    /// Counter tracking unique data (and id derived from it)
     next_block_data: usize,
 }
 
 impl TestRpcInner {
+    /// Simulate adding new block to a `chain`
     fn mine_block(&mut self) {
         self.chain.push(self.next_block_data);
         self.next_block_data += 1;
     }
 }
 
+/// An test Rpc implementation
+///
+/// Current implementation is kind of dumb and just does
+/// reorgs. Lots of reorgs. But it's a good enough stresstest
+/// and actually caught some corner cases already.
 struct TestRpc {
     inner: Mutex<TestRpcInner>,
 }
@@ -88,6 +109,10 @@ impl TestRpc {
         inner.reorgs.clone()
     }
 
+    /// Triger state change
+    ///
+    /// This should be called from rpc handling functions
+    /// periodically to simulate reorgs happening one by one.
     fn maybe_change_state(&self) {
         let mut inner = self.inner.lock().unwrap();
 
@@ -128,7 +153,9 @@ impl TestRpc {
     }
 }
 
-const ID_HEIGHT_OFFSET: usize = 3;
+/// To simplify the implementation every block's
+/// data is just a fixed offset from it's id
+const DATA_TO_ID_OFFSET: usize = 3;
 
 impl Rpc for TestRpc {
     type Data = usize;
@@ -147,7 +174,7 @@ impl Rpc for TestRpc {
         let res = inner
             .chain
             .get(height as usize)
-            .map(|data| data + ID_HEIGHT_OFFSET);
+            .map(|data| data + DATA_TO_ID_OFFSET);
 
         if res.is_none() {
             drop(inner);
@@ -157,7 +184,7 @@ impl Rpc for TestRpc {
     }
 
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>> {
-        let needed_data = hash - ID_HEIGHT_OFFSET;
+        let needed_data = hash - DATA_TO_ID_OFFSET;
         let inner = self.inner.lock().unwrap();
         if let Some((height, data)) = inner
             .chain
@@ -166,7 +193,7 @@ impl Rpc for TestRpc {
             .find(|(_height, data)| **data == needed_data)
         {
             let prev_data = inner.chain[height.saturating_sub(1)];
-            Ok(Some((*data, prev_data + ID_HEIGHT_OFFSET)))
+            Ok(Some((*data, prev_data + DATA_TO_ID_OFFSET)))
         } else {
             drop(inner);
             self.maybe_change_state();
@@ -176,6 +203,7 @@ impl Rpc for TestRpc {
 }
 
 #[test]
+/// Some test cases known to trigger issues in the past
 fn prefetcher_reorg_reliability_fixed() {
     for (start, reorgs_seed) in vec![
         (None, vec![(0, 1, 0), (0, 0, 0), (40, 69, 70)]),
