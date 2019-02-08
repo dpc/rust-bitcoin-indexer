@@ -250,7 +250,7 @@ fn prefetcher_reorg_reliability(start: Option<u8>, mut reorgs_seed: Vec<(u8, u8,
 
         Block {
             height: prefetcher_starting_height,
-            hash: prefetcher_starting_id,
+            id: prefetcher_starting_id,
             data: (),
         }
     });
@@ -279,7 +279,7 @@ fn prefetcher_reorg_reliability(start: Option<u8>, mut reorgs_seed: Vec<(u8, u8,
         let item = prefetcher.next().unwrap();
         debug!(
             "prefetcher returned: {}H (id: {}; data: {})",
-            item.height, item.hash, item.data
+            item.height, item.id, item.data
         );
         chain_insert(&mut chain, item.height as usize, item.data);
     }

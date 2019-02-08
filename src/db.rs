@@ -35,7 +35,7 @@ impl Block {
     pub fn from_core_block(block: &crate::BlockCore) -> Self {
         Block {
             height: block.height,
-            hash: block.hash,
+            hash: block.id,
             prev_hash: block.data.header.prev_blockhash,
             merkle_root: block.data.header.merkle_root,
             time: block.data.header.time,
@@ -59,7 +59,7 @@ impl Tx {
     ) -> Self {
         let coinbase = tx.is_coin_base();
         Self {
-            block_hash: info.hash,
+            block_hash: info.id,
             hash: tx_id,
             coinbase,
         }

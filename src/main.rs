@@ -38,7 +38,7 @@ impl Indexer {
     fn process_block(&mut self, block: BlockCore) -> Result<()> {
         let block_height = block.height;
         if block_height >= self.node_starting_chainhead_height || block_height % 1000 == 0 {
-            eprintln!("Block {}H: {}", block.height, block.hash);
+            eprintln!("Block {}H: {}", block.height, block.id);
         }
 
         self.db.insert(block)?;
@@ -53,7 +53,7 @@ impl Indexer {
             let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
             Some(Block {
                 height: start_from_block,
-                hash: self
+                id: self
                     .db
                     .get_hash_by_height(start_from_block)?
                     .expect("Block hash should be there"),

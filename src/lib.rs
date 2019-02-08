@@ -10,6 +10,15 @@ pub use prelude::{Block, BlockCore};
 use common_failures::prelude::*;
 use std::fmt::{Debug, Display};
 
+/// `Block` specialized over types from `Rpc`
+type RpcBlock<R> = Block<<R as Rpc>::Id, <R as Rpc>::Data>;
+
+/// `RpcBlock` along with an Id of a previous block
+struct RpcBlockWithPrevId<R: Rpc> {
+    block: RpcBlock<R>,
+    prev_block_id: R::Id,
+}
+
 /// An minimum interface for node rpc that prefetcher can work with
 pub trait Rpc: Send + Sync {
     type Data: Send;

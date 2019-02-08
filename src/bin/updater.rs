@@ -33,14 +33,14 @@ fn run() -> Result<()> {
         let transaction = db.transaction()?;
         for (i, item) in batch.enumerate() {
             if i == 0 {
-                eprintln!("Block {}H: {}", item.height, item.hash);
+                eprintln!("Block {}H: {}", item.height, item.id);
             }
             db.execute(
                 "UPDATE blocks SET time = $1, merkle_root = $2 WHERE hash = $3",
                 &[
                     &(i64::from(item.data.header.time)),
                     &reversed(item.data.header.merkle_root.to_bytes().to_vec()),
-                    &reversed(item.hash.to_bytes().to_vec()),
+                    &reversed(item.id.to_bytes().to_vec()),
                 ],
             )?;
         }

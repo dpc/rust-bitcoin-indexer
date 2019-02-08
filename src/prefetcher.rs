@@ -1,7 +1,7 @@
 use log::{debug, info, trace};
 
 use crate::prelude::*;
-use crate::Rpc;
+use crate::{Rpc, RpcBlock, RpcBlockWithPrevId};
 use common_failures::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -45,9 +45,9 @@ impl Rpc for bitcoincore_rpc::Client {
         match self.get_block_hash(height) {
             Err(e) => {
                 if e.to_string().contains("Block height out of range") {
-                    return Ok(None);
+                    Ok(None)
                 } else {
-                    return Err(e.into());
+                    Err(e.into())
                 }
             }
             Ok(o) => Ok(Some(o)),
@@ -70,7 +70,10 @@ impl Rpc for bitcoincore_rpc::Client {
     }
 }
 
-/// An iterator that yields blocks
+/// A block fetcher from a `Rpc`
+///
+/// Implemented as an iterator that yields block events in order,
+/// and blocks for new ones when needed.
 ///
 /// It uses thread-pool to fetch blocks and returns them in order:
 ///
@@ -98,12 +101,12 @@ pub struct Prefetcher<R>
 where
     R: Rpc,
 {
-    rx: Option<crossbeam_channel::Receiver<(Block<R::Id, R::Data>, R::Id)>>,
+    rx: Option<crossbeam_channel::Receiver<RpcBlockWithPrevId<R>>>,
     /// Worker threads
     thread_joins: Vec<std::thread::JoinHandle<()>>,
     /// List of blocks that arrived out-of-order: before the block
     /// we were actually waiting for.
-    out_of_order_items: HashMap<BlockHeight, (Block<R::Id, R::Data>, R::Id)>,
+    out_of_order_items: HashMap<BlockHeight, RpcBlockWithPrevId<R>>,
 
     cur_height: BlockHeight,
     prev_hashes: BTreeMap<BlockHeight, R::Id>,
@@ -125,7 +128,7 @@ where
         let mut prev_hashes = BTreeMap::default();
         let start = if let Some(h_and_hash) = last_block {
             let h = h_and_hash.height;
-            prev_hashes.insert(h, h_and_hash.hash);
+            prev_hashes.insert(h, h_and_hash.id);
             info!("Starting block fetcher starting at {}H", h + 1);
             h + 1
         } else {
@@ -188,17 +191,17 @@ where
     /// Track previous hashes and detect if a given block points
     /// to a different `prev_blockhash` than we recorded. That
     /// means that the previous hash we've recorded was abandoned.
-    fn track_reorgs(&mut self, current: &Block<R::Id, R::Data>, prev_id: R::Id) -> bool {
-        debug_assert_eq!(current.height, self.cur_height);
+    fn track_reorgs(&mut self, block: &RpcBlockWithPrevId<R>) -> bool {
+        debug_assert_eq!(block.block.height, self.cur_height);
         if self.cur_height > 0 {
             debug!(
-                "Reorg check: stored {:?} =? given {} at {}H",
+                "Reorg check: last_id {:?} =? current {} at {}H",
                 self.prev_hashes.get(&(self.cur_height - 1)),
-                prev_id,
+                block.prev_block_id,
                 self.cur_height - 1
             );
             if let Some(stored_prev_id) = self.prev_hashes.get(&(self.cur_height - 1)) {
-                if stored_prev_id != &prev_id {
+                if stored_prev_id != &block.prev_block_id {
                     return true;
                 }
             } else if self.cur_height
@@ -225,13 +228,13 @@ where
                     }
                     panic!(
                         "No prev_hash for a new block {}H {}; max_prev_hash: {}H {}",
-                        self.cur_height, current.hash, max_prev_hash.0, max_prev_hash.1
+                        self.cur_height, block.block.id, max_prev_hash.0, max_prev_hash.1
                     );
                 }
             }
         }
         self.prev_hashes
-            .insert(current.height, current.hash.clone());
+            .insert(block.block.height, block.block.id.clone());
         // this is how big reorgs we're going to detect
         let window_size = 1000;
         if self.cur_height >= window_size {
@@ -285,7 +288,7 @@ impl<R> Iterator for Prefetcher<R>
 where
     R: Rpc + 'static,
 {
-    type Item = Block<R::Id, R::Data>;
+    type Item = RpcBlock<R>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_of_fast_sync == self.cur_height {
             debug!(
@@ -299,12 +302,12 @@ where
 
         'retry_on_reorg: loop {
             if let Some(item) = self.out_of_order_items.remove(&self.cur_height) {
-                if self.track_reorgs(&item.0, item.1) {
+                if self.track_reorgs(&item) {
                     self.reset_on_reorg();
                     continue 'retry_on_reorg;
                 }
                 self.cur_height += 1;
-                return Some(item.0);
+                return Some(item.block);
             }
 
             loop {
@@ -318,17 +321,20 @@ where
                     .expect("rx available")
                     .recv()
                     .expect("Workers shouldn't disconnect");
-                debug!("Got the block from the workers from: {}H", item.0.height);
-                if item.0.height == self.cur_height {
-                    if self.track_reorgs(&item.0, item.1) {
+                debug!(
+                    "Got the block from the workers from: {}H",
+                    item.block.height
+                );
+                if item.block.height == self.cur_height {
+                    if self.track_reorgs(&item) {
                         self.reset_on_reorg();
                         continue 'retry_on_reorg;
                     }
                     self.cur_height += 1;
-                    return Some(item.0);
+                    return Some(item.block);
                 } else {
-                    assert!(item.0.height > self.cur_height);
-                    self.out_of_order_items.insert(item.0.height, item);
+                    assert!(item.block.height > self.cur_height);
+                    self.out_of_order_items.insert(item.block.height, item);
                 }
             }
         }
@@ -353,7 +359,7 @@ where
     next_height: Arc<AtomicUsize>,
     retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
-    tx: crossbeam_channel::Sender<(Block<R::Id, R::Data>, R::Id)>,
+    tx: crossbeam_channel::Sender<RpcBlockWithPrevId<R>>,
     retry_count: usize,
 }
 
@@ -414,17 +420,17 @@ where
     fn get_block_by_height(
         &mut self,
         height: BlockHeight,
-    ) -> Result<Option<(Block<R::Id, R::Data>, R::Id)>> {
-        if let Some(hash) = self.rpc.get_block_id_by_height(height)? {
-            Ok(self.rpc.get_block_by_id(&hash)?.map(|block| {
-                (
-                    Block {
+    ) -> Result<Option<RpcBlockWithPrevId<R>>> {
+        if let Some(id) = self.rpc.get_block_id_by_height(height)? {
+            Ok(self.rpc.get_block_by_id(&id)?.map(|block| {
+                (RpcBlockWithPrevId {
+                    block: Block {
                         height,
-                        hash,
+                        id,
                         data: block.0,
                     },
-                    block.1,
-                )
+                    prev_block_id: block.1,
+                })
             }))
         } else {
             Ok(None)

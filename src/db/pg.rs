@@ -958,13 +958,13 @@ impl DataStore for Postresql {
 
     fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
         if let Some(db_hash) = self.get_hash_by_height(block.height)? {
-            if db_hash != block.hash {
+            if db_hash != block.id {
                 // we move forward and there is a query in a inseting
                 // pipeline (`reorg_queries`)
                 // that will mark anything above and eq this hight as orphaned
                 info!(
                     "Node block != db block at {}H; {} != {} - reorg",
-                    block.height, block.hash, db_hash
+                    block.height, block.id, db_hash
                 );
             } else {
                 // we already have exact same block, non-orphaned, and we don't want
@@ -972,7 +972,7 @@ impl DataStore for Postresql {
                 trace!(
                     "Skip indexing alredy included block {}H {}",
                     block.height,
-                    block.hash
+                    block.id
                 );
                 // if we're here, we must have not inserted anything yet,
                 // and these are prefetcher starting from some past blocks

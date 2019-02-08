@@ -34,7 +34,7 @@ pub type OutPoint = bitcoin::blockdata::transaction::OutPoint;
 /// `T` is type type of the data.
 pub struct Block<H, D = ()> {
     pub height: BlockHeight,
-    pub hash: H,
+    pub id: H,
     pub data: D,
 }
 
