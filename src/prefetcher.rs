@@ -98,12 +98,12 @@ pub struct Prefetcher<R>
 where
     R: Rpc,
 {
-    rx: Option<crossbeam_channel::Receiver<(Block<R::Data, R::Id>, R::Id)>>,
+    rx: Option<crossbeam_channel::Receiver<(Block<R::Id, R::Data>, R::Id)>>,
     /// Worker threads
     thread_joins: Vec<std::thread::JoinHandle<()>>,
     /// List of blocks that arrived out-of-order: before the block
     /// we were actually waiting for.
-    out_of_order_items: HashMap<BlockHeight, (Block<R::Data, R::Id>, R::Id)>,
+    out_of_order_items: HashMap<BlockHeight, (Block<R::Id, R::Data>, R::Id)>,
 
     cur_height: BlockHeight,
     prev_hashes: BTreeMap<BlockHeight, R::Id>,
@@ -117,7 +117,7 @@ impl<R> Prefetcher<R>
 where
     R: Rpc + 'static,
 {
-    pub fn new(rpc: Arc<R>, last_block: Option<Block<(), R::Id>>) -> Result<Self> {
+    pub fn new(rpc: Arc<R>, last_block: Option<Block<R::Id>>) -> Result<Self> {
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
@@ -188,7 +188,7 @@ where
     /// Track previous hashes and detect if a given block points
     /// to a different `prev_blockhash` than we recorded. That
     /// means that the previous hash we've recorded was abandoned.
-    fn track_reorgs(&mut self, current: &Block<R::Data, R::Id>, prev_id: R::Id) -> bool {
+    fn track_reorgs(&mut self, current: &Block<R::Id, R::Data>, prev_id: R::Id) -> bool {
         debug_assert_eq!(current.height, self.cur_height);
         if self.cur_height > 0 {
             debug!(
@@ -285,7 +285,7 @@ impl<R> Iterator for Prefetcher<R>
 where
     R: Rpc + 'static,
 {
-    type Item = Block<R::Data, R::Id>;
+    type Item = Block<R::Id, R::Data>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_of_fast_sync == self.cur_height {
             debug!(
@@ -353,7 +353,7 @@ where
     next_height: Arc<AtomicUsize>,
     retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
-    tx: crossbeam_channel::Sender<(Block<R::Data, R::Id>, R::Id)>,
+    tx: crossbeam_channel::Sender<(Block<R::Id, R::Data>, R::Id)>,
     retry_count: usize,
 }
 
@@ -414,7 +414,7 @@ where
     fn get_block_by_height(
         &mut self,
         height: BlockHeight,
-    ) -> Result<Option<(Block<R::Data, R::Id>, R::Id)>> {
+    ) -> Result<Option<(Block<R::Id, R::Data>, R::Id)>> {
         if let Some(hash) = self.rpc.get_block_id_by_height(height)? {
             Ok(self.rpc.get_block_by_id(&hash)?.map(|block| {
                 (

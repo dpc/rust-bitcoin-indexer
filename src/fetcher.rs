@@ -22,11 +22,7 @@ impl<R> Fetcher<R>
 where
     R: Rpc + Sync + 'static,
 {
-    pub fn new(
-        rpc: Arc<R>,
-        start: Option<Block<(), R::Id>>,
-        end: Option<BlockHeight>,
-    ) -> Result<Self>
+    pub fn new(rpc: Arc<R>, start: Option<Block<R::Id>>, end: Option<BlockHeight>) -> Result<Self>
     where
         R: Rpc,
     {
@@ -46,7 +42,7 @@ impl<R> Iterator for Fetcher<R>
 where
     R: Rpc + 'static,
 {
-    type Item = Block<R::Data, R::Id>;
+    type Item = Block<R::Id, R::Data>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.ended {
