@@ -1,3 +1,5 @@
+#![feature(uniform_paths)]
+
 pub mod db;
 pub mod fetcher;
 pub mod opts;

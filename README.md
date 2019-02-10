@@ -106,7 +106,7 @@ Now everything should be ready. Compile and run with:
 
 ```
 cargo build --release; \
-	and time ./target/release/rust-bitcoin-indexer \
+	time ./target/release/bitcoin-indexer \
 	--rpc-url http://localhost:8332 \
 	--rpc-user user --rpc-pass password
 ```
