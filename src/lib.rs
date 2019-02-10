@@ -29,7 +29,7 @@ pub trait Rpc: Send + Sync {
 
     fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Option<Self::Id>>;
 
-    /// Get the block by height, along with hash to previous block
+    /// Get the block by id, along with id of the previous block
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>>;
 }
 
