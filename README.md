@@ -105,7 +105,7 @@ about inserting around billion records into 3 tables each.
 Now everything should be ready. Compile and run with:
 
 ```
-cargo build --release; \
+cargo build +nightly --release; \
 	time ./target/release/bitcoin-indexer \
 	--rpc-url http://localhost:8332 \
 	--rpc-user user --rpc-pass password
