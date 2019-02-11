@@ -1,8 +1,8 @@
-DROP VIEW IF EXISTS address_balances_at_height;
-DROP VIEW IF EXISTS address_balances;
+DROP VIEW IF EXISTS address_balance_at_height;
+DROP VIEW IF EXISTS address_balance;
 
-DROP TABLE IF EXISTS inputs;
-DROP TABLE IF EXISTS outputs;
-DROP TABLE IF EXISTS txs;
-DROP TABLE IF EXISTS blocks;
+DROP TABLE IF EXISTS input;
+DROP TABLE IF EXISTS output;
+DROP TABLE IF EXISTS tx;
+DROP TABLE IF EXISTS block;
 DROP TABLE IF EXISTS indexer_state;

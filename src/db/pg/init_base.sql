@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS indexer_state (
   height BIGINT
 );
 
-CREATE TABLE IF NOT EXISTS blocks (
+CREATE TABLE IF NOT EXISTS block (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
   height BIGINT NOT NULL,
   hash BYTEA NOT NULL,
@@ -14,20 +14,20 @@ CREATE TABLE IF NOT EXISTS blocks (
 );
 
 -- We always want these two, as a lot of logic is based
--- on `blocks` table, and it's the smallest table overall,
+-- on `block` table, and it's the smallest table overall,
 -- so it doesn't matter that much
-CREATE INDEX IF NOT EXISTS blocks_hash ON blocks (hash);
-CREATE INDEX IF NOT EXISTS blocks_height ON blocks (height);
-CREATE UNIQUE INDEX IF NOT EXISTS blocks_hash_not_orphaned ON blocks (hash) WHERE orphaned = false;
+CREATE INDEX IF NOT EXISTS block_hash ON block (hash);
+CREATE INDEX IF NOT EXISTS block_height ON block (height);
+CREATE UNIQUE INDEX IF NOT EXISTS block_hash_not_orphaned ON block (hash) WHERE orphaned = false;
 
-CREATE TABLE IF NOT EXISTS txs (
+CREATE TABLE IF NOT EXISTS tx (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
   block_id BIGINT NOT NULL,
   hash BYTEA NOT NULL,
   coinbase BOOLEAN NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS outputs (
+CREATE TABLE IF NOT EXISTS output (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
   tx_id BIGINT NOT NULL,
   tx_idx INT NOT NULL,
@@ -36,46 +36,46 @@ CREATE TABLE IF NOT EXISTS outputs (
   coinbase BOOLEAN NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS inputs (
+CREATE TABLE IF NOT EXISTS input (
   output_id BIGINT NOT NULL PRIMARY KEY, -- output id this tx input spends
   tx_id BIGINT NOT NULL -- tx id this input is from
 );
 
 -- create some views
-CREATE OR REPLACE VIEW address_balances AS
+CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
-    CASE WHEN inputs.output_id IS NULL THEN value ELSE 0 END
+    CASE WHEN input.output_id IS NULL THEN value ELSE 0 END
   ) AS value
-  FROM outputs
-  JOIN txs AS output_txs ON outputs.tx_id = output_txs.id
-  JOIN blocks AS output_blocks ON output_txs.block_id = output_blocks.id
-  LEFT JOIN inputs
-    JOIN txs AS input_txs ON inputs.tx_id = input_txs.id
-    JOIN blocks AS input_blocks ON input_txs.block_id = input_blocks.id
-  ON outputs.id = inputs.output_id AND input_blocks.orphaned = false
+  FROM output
+  JOIN tx AS output_tx ON output.tx_id = output_tx.id
+  JOIN block AS output_block ON output_tx.block_id = output_block.id
+  LEFT JOIN input
+    JOIN tx AS input_tx ON input.tx_id = input_tx.id
+    JOIN block AS input_block ON input_tx.block_id = input_block.id
+  ON output.id = input.output_id AND input_block.orphaned = false
   WHERE
-    output_blocks.orphaned = false
+    output_block.orphaned = false
   GROUP BY
-    outputs.address;
+    output.address;
 
-CREATE OR REPLACE VIEW address_balances_at_height AS
-  SELECT address, blocks.height, SUM(
-    CASE WHEN output_blocks.height <= blocks.height AND inputs.output_id IS NULL THEN outputs.value ELSE 0 END
+CREATE OR REPLACE VIEW address_balance_at_height AS
+  SELECT address, block.height, SUM(
+    CASE WHEN output_block.height <= block.height AND input.output_id IS NULL THEN output.value ELSE 0 END
   ) AS value
-  FROM blocks
-  JOIN outputs ON true
-  JOIN txs AS output_txs ON outputs.tx_id = output_txs.id
-  JOIN blocks AS output_blocks ON output_txs.block_id = output_blocks.id
-  LEFT JOIN inputs
-    JOIN txs AS input_txs ON inputs.tx_id = input_txs.id
-    JOIN blocks AS input_blocks ON input_txs.block_id = input_blocks.id
-  ON outputs.id = inputs.output_id AND
-    input_blocks.orphaned = false AND
-    input_blocks.height <= blocks.height
+  FROM block
+  JOIN output ON true
+  JOIN tx AS output_tx ON output.tx_id = output_tx.id
+  JOIN block AS output_block ON output_tx.block_id = output_block.id
+  LEFT JOIN input
+    JOIN tx AS input_tx ON input.tx_id = input_tx.id
+    JOIN block AS input_block ON input_tx.block_id = input_block.id
+  ON output.id = input.output_id AND
+    input_block.orphaned = false AND
+    input_block.height <= block.height
   WHERE
-    blocks.orphaned = false AND
-    output_blocks.orphaned = false
+    block.orphaned = false AND
+    output_block.orphaned = false
   GROUP BY
-    blocks.height,
-    outputs.address
-  ORDER BY outputs.address;
+    block.height,
+    output.address
+  ORDER BY output.address;

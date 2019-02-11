@@ -31,7 +31,7 @@ fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
     }
 
     let mut q: String =
-        "INSERT INTO blocks (height, hash, prev_hash, merkle_root, time) VALUES".into();
+        "INSERT INTO block (height, hash, prev_hash, merkle_root, time) VALUES".into();
     for (i, block) in blocks.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -58,7 +58,7 @@ fn create_bulk_insert_txs_query(txs: &[Tx], block_ids: &HashMap<BlockHash, i64>)
         return p1;
     }
 
-    let mut q: String = "INSERT INTO txs (block_id, hash, coinbase) VALUES".into();
+    let mut q: String = "INSERT INTO tx (block_id, hash, coinbase) VALUES".into();
     for (i, tx) in txs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -89,7 +89,7 @@ fn create_bulk_insert_outputs_query(
     }
 
     let mut q: String =
-        "INSERT INTO outputs (tx_id, tx_idx, value, address, coinbase) VALUES ".into();
+        "INSERT INTO output (tx_id, tx_idx, value, address, coinbase) VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -127,7 +127,7 @@ fn create_bulk_insert_inputs_query(
         return p1;
     }
 
-    let mut q: String = "INSERT INTO inputs (output_id, tx_id) VALUES ".into();
+    let mut q: String = "INSERT INTO input (output_id, tx_id) VALUES ".into();
     for (i, input) in inputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -150,7 +150,7 @@ fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String = "SELECT outputs.id, outputs.value, txs.hash, outputs.tx_idx FROM outputs JOIN txs ON (txs.id = outputs.tx_id) JOIN blocks ON txs.block_id = blocks.id WHERE blocks.orphaned = false AND (txs.hash, outputs.tx_idx) IN ( VALUES ".into();
+    let mut q: String = "SELECT output.id, output.value, tx.hash, output.tx_idx FROM output JOIN txs ON (tx.id = output.tx_id) JOIN block ON tx.block_id = block.id WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -465,7 +465,7 @@ impl Pipeline {
 
                     let insert_queries = create_bulk_insert_blocks_query(&blocks);
                     let reorg_queries = vec![format!(
-                        "UPDATE blocks SET orphaned = true WHERE height >= {};",
+                        "UPDATE block SET orphaned = true WHERE height >= {};",
                         min_block_height
                     )];
 
@@ -758,7 +758,7 @@ impl Postresql {
             let is_bulk_mode = state.get(0);
             let mode = if is_bulk_mode {
                 let count = conn
-                    .query("SELECT COUNT(*) FROM BLOCKS", &[])?
+                    .query("SELECT COUNT(*) FROM block", &[])?
                     .into_iter()
                     .next()
                     .expect("A row from the db")
@@ -917,7 +917,7 @@ impl DataStore for Postresql {
         }
         self.cached_max_height = self
             .connection
-            .query("SELECT height FROM blocks ORDER BY id DESC LIMIT 1", &[])?
+            .query("SELECT height FROM block ORDER BY id DESC LIMIT 1", &[])?
             .iter()
             .next()
             .and_then(|row| row.get::<_, Option<i64>>(0))
@@ -944,7 +944,7 @@ impl DataStore for Postresql {
         Ok(self
             .connection
             .query(
-                "SELECT hash FROM blocks WHERE height = $1 AND orphaned = false",
+                "SELECT hash FROM block WHERE height = $1 AND orphaned = false",
                 &[&(height as i64)],
             )?
             .iter()
@@ -1014,13 +1014,13 @@ impl DataStore for Postresql {
         info!("Deleting data above {}H", height);
         let transaction = self.connection.transaction()?;
         info!("Deleting blocks above {}H", height);
-        transaction.execute("DELETE FROM blocks WHERE height > $1", &[&(height as i64)])?;
+        transaction.execute("DELETE FROM block WHERE height > $1", &[&(height as i64)])?;
         info!("Deleting txs above {}H", height);
-        transaction.execute("DELETE FROM txs WHERE id IN (SELECT txs.id FROM txs LEFT JOIN blocks ON txs.block_id = blocks.id WHERE blocks.id IS NULL)", &[])?;
+        transaction.execute("DELETE FROM tx WHERE id IN (SELECT tx.id FROM tx LEFT JOIN block ON tx.block_id = block.id WHERE block.id IS NULL)", &[])?;
         info!("Deleting outputs above {}H", height);
-        transaction.execute("DELETE FROM outputs WHERE id IN (SELECT outputs.id FROM outputs LEFT JOIN txs ON outputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+        transaction.execute("DELETE FROM output WHERE id IN (SELECT output.id FROM output LEFT JOIN tx ON output.tx_id = tx.id WHERE tx.id IS NULL)", &[])?;
         info!("Deleting inputs above {}H", height);
-        transaction.execute("DELETE FROM inputs WHERE output_id IN (SELECT inputs.output_id FROM inputs LEFT JOIN txs ON inputs.tx_id = txs.id WHERE txs.id IS NULL)", &[])?;
+        transaction.execute("DELETE FROM input WHERE output_id IN (SELECT input.output_id FROM input LEFT JOIN tx ON input.tx_id = tx.id WHERE tx.id IS NULL)", &[])?;
         transaction.commit()?;
         trace!("Deleted data above {}H", height);
         Ok(())

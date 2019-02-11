@@ -1,32 +1,32 @@
-DROP INDEX IF EXISTS blocks_orphaned;
+DROP INDEX IF EXISTS block_orphaned;
 
-CREATE UNIQUE INDEX IF NOT EXISTS txs_hash ON txs (hash);
-DROP INDEX IF EXISTS txs_block_id;
-DROP INDEX IF EXISTS txs_coinbase;
+CREATE UNIQUE INDEX IF NOT EXISTS tx_hash ON tx (hash);
+DROP INDEX IF EXISTS tx_block_id;
+DROP INDEX IF EXISTS tx_coinbase;
 
-CREATE INDEX IF NOT EXISTS outputs_tx_id_tx_idx ON outputs (tx_id, tx_idx);
-DROP INDEX IF EXISTS outputs_address_value;
+CREATE INDEX IF NOT EXISTS output_tx_id_tx_idx ON output (tx_id, tx_idx);
+DROP INDEX IF EXISTS output_address_value;
 
-DROP INDEX IF EXISTS inputs_output_id;
+DROP INDEX IF EXISTS input_output_id;
 
 -- disable autovacum: we don't delete data anyway
-ALTER TABLE blocks SET (
+ALTER TABLE block SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
-ALTER TABLE txs SET (
+ALTER TABLE tx SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
-ALTER TABLE outputs SET (
+ALTER TABLE output SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
-ALTER TABLE inputs SET (
+ALTER TABLE input SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
-ALTER TABLE blocks SET UNLOGGED;
-ALTER TABLE txs SET UNLOGGED;
-ALTER TABLE outputs SET UNLOGGED;
-ALTER TABLE inputs SET UNLOGGED;
+ALTER TABLE block SET UNLOGGED;
+ALTER TABLE tx SET UNLOGGED;
+ALTER TABLE output SET UNLOGGED;
+ALTER TABLE input SET UNLOGGED;
