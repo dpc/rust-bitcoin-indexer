@@ -1,4 +1,5 @@
 pub mod db;
+pub mod event_source;
 pub mod fetcher;
 pub mod opts;
 pub mod prefetcher;

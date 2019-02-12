@@ -18,6 +18,12 @@ pub fn establish_connection() -> Result<Connection> {
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
+fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
+    let mut human_bytes = row.get::<_, Vec<u8>>(index);
+    human_bytes.reverse();
+    BlockHash::from(human_bytes.as_slice())
+}
+
 fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
     if blocks.is_empty() {
         return vec![];
@@ -150,7 +156,7 @@ fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String = "SELECT output.id, output.value, tx.hash, output.tx_idx FROM output JOIN txs ON (tx.id = output.tx_id) JOIN block ON tx.block_id = block.id WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES ".into();
+    let mut q: String = "SELECT output.id, output.value, tx.hash, output.tx_idx FROM output JOIN tx ON (tx.id = output.tx_id) JOIN block ON tx.block_id = block.id WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES ".into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -222,11 +228,7 @@ impl UtxoSetCache {
         let missing: Vec<_> = missing.into_iter().collect();
         for q in crate_fetch_outputs_query(&missing) {
             for row in &conn.query(&q, &[])? {
-                let tx_hash = {
-                    let mut human_bytes = row.get::<_, Vec<u8>>(2);
-                    human_bytes.reverse();
-                    BlockHash::from(human_bytes.as_slice())
-                };
+                let tx_hash = get_hash(&row, 2);
                 out.insert(
                     OutPoint {
                         txid: tx_hash,
@@ -292,15 +294,15 @@ fn execute_bulk_insert_transcation(
 }
 
 fn read_next_tx_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "txs", "id")
+    read_next_id(conn, "tx", "id")
 }
 
 fn read_next_output_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "outputs", "id")
+    read_next_id(conn, "output", "id")
 }
 
 fn read_next_block_id(conn: &Connection) -> Result<i64> {
-    read_next_id(conn, "blocks", "id")
+    read_next_id(conn, "block", "id")
 }
 
 type BlocksInFlight = HashSet<BlockHash>;
@@ -949,11 +951,7 @@ impl DataStore for Postresql {
             )?
             .iter()
             .next()
-            .map(|row| row.get::<_, Vec<u8>>(0))
-            .map(|mut human_bytes| {
-                human_bytes.reverse();
-                BlockHash::from(human_bytes.as_slice())
-            }))
+            .map(|row| get_hash(&row, 0)))
     }
 
     fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
@@ -1024,5 +1022,66 @@ impl DataStore for Postresql {
         transaction.commit()?;
         trace!("Deleted data above {}H", height);
         Ok(())
+    }
+}
+
+impl crate::event_source::EventSource for postgres::Connection {
+    type Cursor = i64;
+    type Id = BlockHash;
+    type Data = ();
+
+    fn next(
+        &mut self,
+        cursor: Option<Self::Cursor>,
+        limit: u64,
+    ) -> Result<(Vec<Block<Self::Id, Self::Data>>, Self::Cursor)> {
+        let cursor = cursor.unwrap_or(-1);
+        let rows = self.query(
+            "SELECT id, hash, height FROM block WHERE block.id > $1 ORDER BY id ASC LIMIT $2;",
+            &[&cursor, &(limit as i64)],
+        )?;
+
+        let mut res = vec![];
+        let mut prev_height = None;
+        let mut last = None;
+
+        for row in &rows {
+            let id: i64 = row.get(0);
+            let hash = get_hash(&row, 1);
+            let height: i64 = row.get(2);
+            if prev_height
+                .map(|prev_height| height <= prev_height)
+                .unwrap_or(true)
+            {
+                let orphaned = self.query(
+                    r#"SELECT id, hash, height
+                    FROM block
+                    WHERE block.id < $1 AND
+                      block.id > (SELECT MAX(id) FROM block WHERE height < $2 AND id < $1)
+                    ORDER BY id DESC;"#,
+                    &[&id, &height],
+                )?;
+                for row in &orphaned {
+                    let _id: i64 = row.get(0);
+                    let hash = get_hash(&row, 1);
+                    let height: i64 = row.get(2);
+                    res.push(Block {
+                        height: height as u64,
+                        id: hash,
+                        data: (),
+                    });
+                }
+            }
+            res.push(Block {
+                height: height as u64,
+                id: hash,
+                data: (),
+            });
+
+            prev_height = Some(height);
+            last = Some(id);
+        }
+
+        Ok((res, last.unwrap_or(cursor)))
     }
 }

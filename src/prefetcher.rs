@@ -194,13 +194,13 @@ where
     fn track_reorgs(&mut self, block: &RpcBlockWithPrevId<R>) -> bool {
         debug_assert_eq!(block.block.height, self.cur_height);
         if self.cur_height > 0 {
-            debug!(
-                "Reorg check: last_id {:?} =? current {} at {}H",
-                self.prev_hashes.get(&(self.cur_height - 1)),
-                block.prev_block_id,
-                self.cur_height - 1
-            );
             if let Some(stored_prev_id) = self.prev_hashes.get(&(self.cur_height - 1)) {
+                debug!(
+                    "Reorg check: last_id {} =? current {} at {}H",
+                    stored_prev_id,
+                    block.prev_block_id,
+                    self.cur_height - 1
+                );
                 if stored_prev_id != &block.prev_block_id {
                     return true;
                 }
