@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{env, fmt::Write};
+use std::{env, fmt, fmt::Write};
 
 pub fn establish_connection() -> Result<Connection> {
     dotenv()?;
@@ -397,6 +397,16 @@ impl Mode {
     }
 }
 
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Mode::FreshBulk => "fresh-bulk",
+            Mode::Bulk => "bulk",
+            Mode::Normal => "normal",
+        })
+    }
+}
+
 impl Pipeline {
     fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
@@ -765,7 +775,9 @@ impl Postresql {
         };
         if s.mode == Mode::FreshBulk {
             s.self_test()?;
-        } else if s.mode == Mode::Bulk {
+        }
+        s.set_schema_to_mode(s.mode)?;
+        if s.mode == Mode::Bulk {
             s.wipe_inconsistent_data(height)?;
         }
         s.start_workers();
@@ -803,7 +815,7 @@ impl Postresql {
     }
 
     fn init(conn: &Connection) -> Result<()> {
-        info!("Creating db schema");
+        info!("Creating initial db schema");
         conn.batch_execute(include_str!("pg/init_base.sql"))?;
         Ok(())
     }
@@ -901,6 +913,12 @@ impl Postresql {
         Ok(())
     }
 
+    fn set_schema_to_mode(&mut self, mode: Mode) -> Result<()> {
+        info!("Adjusting schema to mode: {}", mode);
+        self.connection.batch_execute(mode.to_sql_query_str())?;
+        Ok(())
+    }
+
     fn set_mode_uncodintionally(&mut self, mode: Mode) -> Result<()> {
         self.mode = mode;
 
@@ -908,7 +926,7 @@ impl Postresql {
         self.flush_batch()?;
         self.flush_workers();
 
-        self.connection.batch_execute(mode.to_sql_query_str())?;
+        self.set_schema_to_mode(mode)?;
         // commit to the new mode in the db last
         self.connection.execute(
             "UPDATE indexer_state SET bulk_mode = $1",

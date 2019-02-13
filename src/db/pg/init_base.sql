@@ -21,14 +21,14 @@ CREATE INDEX IF NOT EXISTS block_height ON block (height);
 CREATE UNIQUE INDEX IF NOT EXISTS block_hash_not_orphaned ON block (hash) WHERE orphaned = false;
 
 CREATE TABLE IF NOT EXISTS tx (
-  id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
+  id BIGSERIAL NOT NULL, -- defined as PKEY later
   block_id BIGINT NOT NULL,
   hash BYTEA NOT NULL,
   coinbase BOOLEAN NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS output (
-  id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
+  id BIGSERIAL NOT NULL, -- defined as PKEY later
   tx_id BIGINT NOT NULL,
   tx_idx INT NOT NULL,
   value BIGINT NOT NULL,
