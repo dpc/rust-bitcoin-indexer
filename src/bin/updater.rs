@@ -1,4 +1,4 @@
-use bitcoin_indexer::{db, fetcher, opts, prelude::*, utils::reversed};
+use bitcoin_indexer::{db, node::fetcher, opts, prelude::*, utils::reversed};
 use itertools::Itertools;
 use std::sync::Arc;
 

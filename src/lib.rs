@@ -1,8 +1,7 @@
 pub mod db;
 pub mod event_source;
-pub mod fetcher;
+pub mod node;
 pub mod opts;
-pub mod prefetcher;
 pub mod prelude;
 pub mod utils;
 

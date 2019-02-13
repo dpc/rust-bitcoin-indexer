@@ -1,4 +1,5 @@
 use super::*;
+use crate::node::prefetcher;
 use log::{debug, info, trace};
 use quickcheck_macros::quickcheck;
 use std::sync::{Arc, Mutex};

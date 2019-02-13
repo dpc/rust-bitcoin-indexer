@@ -2,7 +2,8 @@
 
 use bitcoin_indexer::{
     db::{self, DataStore},
-    opts, prefetcher,
+    node::prefetcher,
+    opts,
     prelude::*,
 };
 use log::info;

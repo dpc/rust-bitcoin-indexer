@@ -1,4 +1,5 @@
-use crate::{prefetcher, prelude::*, Rpc};
+use super::prefetcher;
+use crate::{prelude::*, Rpc};
 use std::sync::Arc;
 
 use common_failures::prelude::*;
