@@ -640,9 +640,8 @@ impl Pipeline {
                         max_block_height
                     ));
 
-                    if mode.is_bulk() {
+                    if !mode.is_bulk() {
                         pending_queries.push(queries);
-
                         execute_bulk_insert_transcation(
                             &conn,
                             "all block data",
