@@ -1,4 +1,4 @@
-use bitcoin_indexer::{db, event_source::EventSource, opts};
+use bitcoin_indexer::{db, event_source::EventSource};
 use common_failures::{prelude::*, quick_main};
 
 fn run() -> Result<()> {

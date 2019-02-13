@@ -36,8 +36,10 @@ CREATE TABLE IF NOT EXISTS output (
   coinbase BOOLEAN NOT NULL
 );
 
+-- Unfortunately `input` is not simply unique on `output_id`, because there can be
+-- multiple inputs created for the same output, some of which were orphaned
 CREATE TABLE IF NOT EXISTS input (
-  output_id BIGINT NOT NULL PRIMARY KEY, -- output id this tx input spends
+  output_id BIGINT NOT NULL, -- output id this tx input spends
   tx_id BIGINT NOT NULL -- tx id this input is from
 );
 

@@ -125,7 +125,7 @@ fn create_bulk_insert_inputs_query(
     if inputs.is_empty() {
         return vec![];
     }
-    if inputs.len() > 9000 {
+    if inputs.len() > 9_000 {
         let mid = inputs.len() / 2;
         let mut p1 = create_bulk_insert_inputs_query(&inputs[0..mid], outputs, tx_ids);
         let mut p2 = create_bulk_insert_inputs_query(&inputs[mid..inputs.len()], outputs, tx_ids);
@@ -148,15 +148,20 @@ fn create_bulk_insert_inputs_query(
     vec![q]
 }
 
-fn crate_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
+fn create_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
     if outputs.len() > 1500 {
         let mid = outputs.len() / 2;
-        let mut p1 = crate_fetch_outputs_query(&outputs[0..mid]);
-        let mut p2 = crate_fetch_outputs_query(&outputs[mid..outputs.len()]);
+        let mut p1 = create_fetch_outputs_query(&outputs[0..mid]);
+        let mut p2 = create_fetch_outputs_query(&outputs[mid..outputs.len()]);
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String = "SELECT output.id, output.value, tx.hash, output.tx_idx FROM output JOIN tx ON (tx.id = output.tx_id) JOIN block ON tx.block_id = block.id WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES ".into();
+    let mut q: String = r#"
+    SELECT output.id, output.value, tx.hash, output.tx_idx
+    FROM output JOIN tx ON (tx.id = output.tx_id)
+    JOIN block ON tx.block_id = block.id
+    WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES "#
+        .into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
@@ -226,7 +231,7 @@ impl UtxoSetCache {
 
         let start = Instant::now();
         let missing: Vec<_> = missing.into_iter().collect();
-        for q in crate_fetch_outputs_query(&missing) {
+        for q in create_fetch_outputs_query(&missing) {
             for row in &conn.query(&q, &[])? {
                 let tx_hash = get_hash(&row, 2);
                 out.insert(
@@ -627,6 +632,20 @@ impl Pipeline {
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
                     drop(utxo_lock);
+                    // In `normal` mode, we have not yet (potentially) marked blocks
+                    // orphaned by currently inserted ones, as such
+                    // using query that was created in first thread of the pipeline (blocks),
+                    // which is now sitting in `pending_queries`. You might wonder if that means,
+                    // we could potentially pick ids of `output`s that will be orphaned.
+                    // Fortunately it's not a problem. If `output` like that was to be orphaned, and re-added,
+                    // it would have to be in the blocks we're processing and therfore can not
+                    // be "missing", as we already must have added to a cache. This is howerver quite
+                    // subtle, so worth remembering about, and thinking about again.
+                    //
+                    // To rephrase: correctness of this fetching getting fresh IDs,
+                    // depends on all possible valid outputs being either in the UTXO cache,
+                    // or having any duplicates from orphaned blocks already marked
+                    // as such.
                     let missing = UtxoSetCache::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
                         output_ids.insert(k, v);

@@ -7,6 +7,14 @@ DROP INDEX IF EXISTS tx_coinbase;
 CREATE INDEX IF NOT EXISTS output_tx_id_tx_idx ON output (tx_id, tx_idx);
 DROP INDEX IF EXISTS output_address_value;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'input' AND constraint_type = 'PRIMARY KEY'
+  ) THEN
+    ALTER TABLE input DROP CONSTRAINT input_pkey;
+  END IF;
+END $$;
 DROP INDEX IF EXISTS input_output_id;
 
 -- disable autovacum: we don't delete data anyway

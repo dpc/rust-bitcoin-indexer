@@ -8,6 +8,8 @@ ANALYZE tx;
 ANALYZE output;
 ANALYZE input;
 
+
+
 CREATE INDEX IF NOT EXISTS block_orphaned ON block (orphaned);
 
 CREATE UNIQUE INDEX IF NOT EXISTS tx_hash ON tx (hash, block_id);
@@ -17,6 +19,14 @@ CREATE INDEX IF NOT EXISTS tx_coinbase ON tx (coinbase);
 CREATE INDEX IF NOT EXISTS output_tx_id_tx_idx ON output (tx_id, tx_idx);
 CREATE INDEX IF NOT EXISTS output_address_value ON output (address, value);
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'input' AND constraint_type = 'PRIMARY KEY'
+  ) THEN
+    ALTER TABLE input ADD PRIMARY KEY (output_id, tx_id);
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS input_tx_id ON input (tx_id);
 
 
