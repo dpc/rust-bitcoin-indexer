@@ -312,28 +312,10 @@ fn read_next_block_id(conn: &Connection) -> Result<i64> {
 
 type BlocksInFlight = HashSet<BlockHash>;
 
-/// Worker Pipepline
+/// Insertion Worker Thread
 ///
-/// `Pipeline` is reponsible for actually inserting data into the db.
-///  It is split between multiple threads - each handling one table.
-///  The idea here is to have some level of paralelism to help saturate
-///  network IO, and then disk IO. As each thread touches only one
-///  table - there is no contention between them.
-///
-///  `Pipeline` name comes from the fact that each thread does its job
-///  and passes rest of the data to the next one.
-///
-///  A lot of stuff here about performance is actually speculative,
-///  but there is only so many hours in a day, and it seems to work well
-///  in practice.
-///
-///  In as `atomic` mode, last thread inserts entire data in one transaction
-///  to prevent temporary inconsistency (eg. txs inserted, but blocks not yet).
-///  It is to be used in non-bulk mode, when blocks are indexed one at the time,
-///  so performance is not important. Passing formatted queries around is a compromise
-///  between having two different versions of this logic, and good performance
-///  in bulk mode.
-struct Pipeline {
+/// Reponsible for actually inserting data into the db.
+struct InsertThread {
     tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
     blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
@@ -404,8 +386,8 @@ impl fmt::Display for Mode {
     }
 }
 
-impl Pipeline {
-    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, _mode: Mode) -> Result<Self> {
+impl InsertThread {
+    fn new(in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -415,9 +397,9 @@ impl Pipeline {
 
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
-        let blocks_thread = std::thread::spawn({
+        let worker_thread = std::thread::spawn({
             let conn = establish_connection()?;
-            fn_log_err("db_worker_blocks", move || {
+            fn_log_err("pg_worker", move || {
                 let mut next_block_id = read_next_block_id(&conn)?;
                 let mut next_tx_id = read_next_tx_id(&conn)?;
                 let mut next_output_id = read_next_output_id(&conn)?;
@@ -538,14 +520,14 @@ impl Pipeline {
             })
         });
 
-        Ok(Self {
+        Ok(InsertThread {
             tx: Some(tx),
-            blocks_thread: Some(blocks_thread),
+            blocks_thread: Some(worker_thread),
         })
     }
 }
 
-impl Drop for Pipeline {
+impl Drop for InsertThread {
     fn drop(&mut self) {
         drop(self.tx.take());
 
@@ -562,7 +544,7 @@ impl Drop for Pipeline {
 pub struct Postresql {
     connection: Connection,
     cached_max_height: Option<u64>,
-    pipeline: Option<Pipeline>,
+    pipeline: Option<InsertThread>,
     batch: Vec<crate::BlockCore>,
     batch_txs_total: u64,
     batch_id: u64,
@@ -674,7 +656,7 @@ impl Postresql {
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(Pipeline::new(self.in_flight.clone(), self.mode).unwrap())
+        self.pipeline = Some(InsertThread::new(self.in_flight.clone()).unwrap())
     }
 
     fn flush_workers(&mut self) {
