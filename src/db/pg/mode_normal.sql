@@ -1,12 +1,3 @@
-ALTER TABLE block SET LOGGED;
-ALTER TABLE tx SET LOGGED;
-ALTER TABLE output SET LOGGED;
-ALTER TABLE input SET LOGGED;
-
-ANALYZE block;
-ANALYZE tx;
-ANALYZE output;
-ANALYZE input;
 
 CREATE INDEX IF NOT EXISTS block_orphaned ON block (orphaned);
 
@@ -43,6 +34,15 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS input_tx_id ON input (tx_id);
 
+ALTER TABLE block SET LOGGED;
+ALTER TABLE tx SET LOGGED;
+ALTER TABLE output SET LOGGED;
+ALTER TABLE input SET LOGGED;
+
+ANALYZE block;
+ANALYZE tx;
+ANALYZE output;
+ANALYZE input;
 
 -- enableautovacum: we don't delete data, but it might be useful anyway
 ALTER TABLE block SET (
