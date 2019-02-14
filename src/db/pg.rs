@@ -335,9 +335,6 @@ type BlocksInFlight = HashSet<BlockHash>;
 ///  in bulk mode.
 struct Pipeline {
     tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
-    txs_thread: Option<std::thread::JoinHandle<Result<()>>>,
-    outputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
-    inputs_thread: Option<std::thread::JoinHandle<Result<()>>>,
     blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
@@ -408,7 +405,7 @@ impl fmt::Display for Mode {
 }
 
 impl Pipeline {
-    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Result<Self> {
+    fn new(in_flight: Arc<Mutex<BlocksInFlight>>, _mode: Mode) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -416,41 +413,14 @@ impl Pipeline {
         // incrased memory usage.
         let (tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
 
-        let (blocks_tx, txs_rx) = crossbeam_channel::bounded::<(
-            u64,
-            HashMap<BlockHash, i64>,
-            Vec<Tx>,
-            Vec<Output>,
-            Vec<Input>,
-            u64,
-            Vec<Vec<String>>,
-        )>(0);
-
-        let (txs_tx, outputs_rx) = crossbeam_channel::bounded::<(
-            u64,
-            HashMap<BlockHash, i64>,
-            HashMap<TxHash, i64>,
-            Vec<Output>,
-            Vec<Input>,
-            u64,
-            Vec<Vec<String>>,
-        )>(0);
-
-        let (outputs_tx, inputs_rx) = crossbeam_channel::bounded::<(
-            u64,
-            HashMap<BlockHash, i64>,
-            HashMap<TxHash, i64>,
-            Vec<Input>,
-            u64,
-            Vec<Vec<String>>,
-        )>(0);
-
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
         let blocks_thread = std::thread::spawn({
             let conn = establish_connection()?;
             fn_log_err("db_worker_blocks", move || {
-                let mut next_id = read_next_block_id(&conn)?;
+                let mut next_block_id = read_next_block_id(&conn)?;
+                let mut next_tx_id = read_next_tx_id(&conn)?;
+                let mut next_output_id = read_next_output_id(&conn)?;
                 while let Ok((batch_id, parsed)) = blocks_rx.recv() {
                     let mut blocks: Vec<super::Block> = vec![];
                     let mut txs: Vec<super::Tx> = vec![];
@@ -478,170 +448,36 @@ impl Pipeline {
                         .map(|b| b.height)
                         .expect("at least one block");
 
-                    let blocks_len = blocks.len();
-
-                    let insert_queries = create_bulk_insert_blocks_query(&blocks);
-                    let reorg_queries = vec![format!(
-                        "UPDATE block SET orphaned = true WHERE height >= {};",
-                        min_block_height
-                    )];
-
-                    if !mode.is_bulk() {
-                        pending_queries.push(reorg_queries);
-                        pending_queries.push(insert_queries);
-                    } else {
-                        assert_eq!(next_id, read_next_block_id(&conn)?);
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "blocks",
-                            blocks.len(),
-                            batch_id,
-                            vec![reorg_queries, insert_queries].into_iter().flatten(),
-                        )?;
-                    }
-
                     let block_ids: HashMap<_, _> = blocks
-                        .into_iter()
+                        .iter()
                         .enumerate()
-                        .map(|(i, tx)| (tx.hash, next_id + i as i64))
+                        .map(|(i, tx)| (tx.hash, next_block_id + i as i64))
                         .collect();
 
-                    next_id += blocks_len as i64;
+                    next_block_id += blocks.len() as i64;
 
-                    blocks_tx.send((
-                        batch_id,
-                        block_ids,
-                        txs,
-                        outputs,
-                        inputs,
-                        max_block_height,
-                        pending_queries,
-                    ))?;
-                }
-                Ok(())
-            })
-        });
-        let txs_thread = std::thread::spawn({
-            let conn = establish_connection()?;
-            fn_log_err("db_worker_txs", move || {
-                let mut next_id = read_next_tx_id(&conn)?;
-                while let Ok((
-                    batch_id,
-                    block_ids,
-                    txs,
-                    outputs,
-                    inputs,
-                    max_block_height,
-                    mut pending_queries,
-                )) = txs_rx.recv()
-                {
-                    let queries = create_bulk_insert_txs_query(&txs, &block_ids);
-
-                    if !mode.is_bulk() {
-                        pending_queries.push(queries);
-                    } else {
-                        assert_eq!(next_id, read_next_tx_id(&conn)?);
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "txs",
-                            txs.len(),
-                            batch_id,
-                            queries.into_iter(),
-                        )?
-                    };
-
-                    let batch_len = txs.len();
                     let tx_ids: HashMap<_, _> = txs
-                        .into_iter()
+                        .iter()
                         .enumerate()
-                        .map(|(i, tx)| (tx.hash, next_id + i as i64))
+                        .map(|(i, tx)| (tx.hash, next_tx_id + i as i64))
                         .collect();
 
-                    next_id += batch_len as i64;
-
-                    txs_tx.send((
-                        batch_id,
-                        block_ids,
-                        tx_ids,
-                        outputs,
-                        inputs,
-                        max_block_height,
-                        pending_queries,
-                    ))?;
-                }
-                Ok(())
-            })
-        });
-
-        let outputs_thread = std::thread::spawn({
-            let conn = establish_connection()?;
-            let utxo_set_cache = utxo_set_cache.clone();
-            fn_log_err("db_worker_outputs", move || {
-                let mut next_id = read_next_output_id(&conn)?;
-                while let Ok((
-                    batch_id,
-                    block_ids,
-                    tx_ids,
-                    outputs,
-                    inputs,
-                    max_block_height,
-                    mut pending_queries,
-                )) = outputs_rx.recv()
-                {
-                    let queries = create_bulk_insert_outputs_query(&outputs, &tx_ids);
-
-                    if !mode.is_bulk() {
-                        pending_queries.push(queries);
-                    } else {
-                        assert_eq!(next_id, read_next_output_id(&conn)?);
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "outputs",
-                            outputs.len(),
-                            batch_id,
-                            queries.into_iter(),
-                        )?;
-                    }
+                    next_tx_id += txs.len() as i64;
 
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     outputs.iter().enumerate().for_each(|(i, output)| {
-                        let id = next_id + (i as i64);
+                        let id = next_output_id + (i as i64);
                         utxo_lock.insert(output.out_point, id, output.value);
                     });
                     drop(utxo_lock);
 
-                    next_id += outputs.len() as i64;
+                    next_output_id += outputs.len() as i64;
 
-                    outputs_tx.send((
-                        batch_id,
-                        block_ids,
-                        tx_ids,
-                        inputs,
-                        max_block_height,
-                        pending_queries,
-                    ))?;
-                }
-                Ok(())
-            })
-        });
-
-        let inputs_thread = std::thread::spawn({
-            let conn = establish_connection()?;
-            let utxo_set_cache = utxo_set_cache.clone();
-            fn_log_err("db_worker_inputs", move || {
-                while let Ok((
-                    batch_id,
-                    block_ids,
-                    tx_ids,
-                    inputs,
-                    max_block_height,
-                    mut pending_queries,
-                )) = inputs_rx.recv()
-                {
                     let mut utxo_lock = utxo_set_cache.lock().unwrap();
                     let (mut output_ids, missing) =
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
                     drop(utxo_lock);
+
                     // In `normal` mode, we have not yet (potentially) marked blocks
                     // orphaned by currently inserted ones, as such
                     // using query that was created in first thread of the pipeline (blocks),
@@ -661,32 +497,31 @@ impl Pipeline {
                         output_ids.insert(k, v);
                     }
 
-                    let mut queries =
-                        create_bulk_insert_inputs_query(&inputs, &output_ids, &tx_ids);
-
-                    queries.push(format!(
-                        "UPDATE indexer_state SET height = {};",
-                        max_block_height
+                    pending_queries.push(create_bulk_insert_blocks_query(&blocks));
+                    pending_queries.push(vec![format!(
+                        "UPDATE block SET orphaned = true WHERE height >= {};",
+                        min_block_height
+                    )]);
+                    pending_queries.push(create_bulk_insert_txs_query(&txs, &block_ids));
+                    pending_queries.push(create_bulk_insert_outputs_query(&outputs, &tx_ids));
+                    pending_queries.push(create_bulk_insert_inputs_query(
+                        &inputs,
+                        &output_ids,
+                        &tx_ids,
                     ));
 
-                    if !mode.is_bulk() {
-                        pending_queries.push(queries);
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "all block data",
-                            block_ids.len(),
-                            batch_id,
-                            pending_queries.into_iter().flatten(),
-                        )?;
-                    } else {
-                        execute_bulk_insert_transcation(
-                            &conn,
-                            "inputs",
-                            inputs.len(),
-                            batch_id,
-                            queries.into_iter(),
-                        )?;
-                    }
+                    pending_queries.push(vec![format!(
+                        "UPDATE indexer_state SET height = {};",
+                        max_block_height
+                    )]);
+
+                    execute_bulk_insert_transcation(
+                        &conn,
+                        "all block data",
+                        block_ids.len(),
+                        batch_id,
+                        pending_queries.into_iter().flatten(),
+                    )?;
 
                     info!("Block {}H fully indexed and commited", max_block_height);
 
@@ -705,9 +540,6 @@ impl Pipeline {
 
         Ok(Self {
             tx: Some(tx),
-            txs_thread: Some(txs_thread),
-            outputs_thread: Some(outputs_thread),
-            inputs_thread: Some(inputs_thread),
             blocks_thread: Some(blocks_thread),
         })
     }
@@ -717,12 +549,7 @@ impl Drop for Pipeline {
     fn drop(&mut self) {
         drop(self.tx.take());
 
-        let joins = vec![
-            self.txs_thread.take().unwrap(),
-            self.outputs_thread.take().unwrap(),
-            self.inputs_thread.take().unwrap(),
-            self.blocks_thread.take().unwrap(),
-        ];
+        let joins = vec![self.blocks_thread.take().unwrap()];
 
         for join in joins {
             join.join()
