@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS tx (
   id BIGSERIAL NOT NULL, -- defined as PKEY later
   block_id BIGINT NOT NULL,
   hash BYTEA NOT NULL,
+  weight BIGINT NOT NULL,
+  fee BIGINT NOT NULL,
   coinbase BOOLEAN NOT NULL
 );
 

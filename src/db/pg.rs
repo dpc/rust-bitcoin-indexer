@@ -52,26 +52,41 @@ fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
     return vec![q];
 }
 
-fn create_bulk_insert_txs_query(txs: &[Tx], block_ids: &HashMap<BlockHash, i64>) -> Vec<String> {
+fn create_bulk_insert_txs_query(
+    txs: &[Tx],
+    block_ids: &HashMap<BlockHash, i64>,
+    outputs: &HashMap<OutPoint, UtxoSetEntry>,
+) -> Vec<String> {
     if txs.is_empty() {
         return vec![];
     }
     if txs.len() > 9000 {
         let mid = txs.len() / 2;
-        let mut p1 = create_bulk_insert_txs_query(&txs[0..mid], block_ids);
-        let mut p2 = create_bulk_insert_txs_query(&txs[mid..txs.len()], block_ids);
+        let mut p1 = create_bulk_insert_txs_query(&txs[0..mid], block_ids, outputs);
+        let mut p2 = create_bulk_insert_txs_query(&txs[mid..txs.len()], block_ids, outputs);
         p1.append(&mut p2);
         return p1;
     }
 
-    let mut q: String = "INSERT INTO tx (block_id, hash, coinbase) VALUES".into();
+    let mut q: String = "INSERT INTO tx (block_id, hash, fee, weight, coinbase) VALUES".into();
     for (i, tx) in txs.iter().enumerate() {
+        let fee = if tx.coinbase {
+            0
+        } else {
+            let input_value_sum = tx
+                .inputs
+                .iter()
+                .fold(0, |acc, out_point| acc + outputs[out_point].value);
+            assert!(tx.output_value_sum <= input_value_sum);
+            input_value_sum - tx.output_value_sum
+        };
+
         if i > 0 {
             q.push_str(",")
         }
         q.write_fmt(format_args!(
-            "({},'\\x{}',{})",
-            block_ids[&tx.block_hash], tx.hash, tx.coinbase,
+            "({},'\\x{}',{},{},{})",
+            block_ids[&tx.block_hash], tx.hash, fee, tx.weight, tx.coinbase,
         ))
         .unwrap();
     }
@@ -281,7 +296,7 @@ fn execute_bulk_insert_transcation(
     batch_id: u64,
     queries: impl Iterator<Item = String>,
 ) -> Result<()> {
-    trace!("Inserting {} {} from batch {}...", len, name, batch_id);
+    debug!("Inserting {} {} from batch {}...", len, name, batch_id);
     let start = Instant::now();
     let transaction = conn.transaction()?;
     for s in queries {
@@ -393,7 +408,7 @@ impl InsertThread {
         // work in the channels. Buffered work does not
         // improve performance, and  more things in flight means
         // incrased memory usage.
-        let (tx, blocks_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
+        let (tx, rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
 
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
@@ -403,7 +418,7 @@ impl InsertThread {
                 let mut next_block_id = read_next_block_id(&conn)?;
                 let mut next_tx_id = read_next_tx_id(&conn)?;
                 let mut next_output_id = read_next_output_id(&conn)?;
-                while let Ok((batch_id, parsed)) = blocks_rx.recv() {
+                while let Ok((batch_id, parsed)) = rx.recv() {
                     let mut blocks: Vec<super::Block> = vec![];
                     let mut txs: Vec<super::Tx> = vec![];
                     let mut outputs: Vec<super::Output> = vec![];
@@ -479,12 +494,16 @@ impl InsertThread {
                         output_ids.insert(k, v);
                     }
 
-                    pending_queries.push(create_bulk_insert_blocks_query(&blocks));
                     pending_queries.push(vec![format!(
                         "UPDATE block SET orphaned = true WHERE height >= {};",
                         min_block_height
                     )]);
-                    pending_queries.push(create_bulk_insert_txs_query(&txs, &block_ids));
+                    pending_queries.push(create_bulk_insert_blocks_query(&blocks));
+                    pending_queries.push(create_bulk_insert_txs_query(
+                        &txs,
+                        &block_ids,
+                        &output_ids,
+                    ));
                     pending_queries.push(create_bulk_insert_outputs_query(&outputs, &tx_ids));
                     pending_queries.push(create_bulk_insert_inputs_query(
                         &inputs,
@@ -774,6 +793,7 @@ impl DataStore for Postresql {
     }
 
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
+        trace!("PG: get_hash_by_height {}H", height);
         if let Some(max_height) = self.cached_max_height {
             if max_height < height {
                 return Ok(None);

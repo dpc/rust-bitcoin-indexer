@@ -49,6 +49,9 @@ struct Tx {
     pub hash: TxHash,
     pub block_hash: BlockHash,
     pub coinbase: bool,
+    pub output_value_sum: u64,
+    pub inputs: Vec<OutPoint>,
+    pub weight: u64,
 }
 
 impl Tx {
@@ -62,6 +65,9 @@ impl Tx {
             block_hash: info.id,
             hash: tx_id,
             coinbase,
+            inputs: tx.input.iter().map(|tx_in| tx_in.previous_output).collect(),
+            output_value_sum: tx.output.iter().fold(0, |acc, o| acc + o.value),
+            weight: tx.get_weight(),
         }
     }
 }
