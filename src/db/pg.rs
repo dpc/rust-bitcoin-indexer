@@ -366,14 +366,6 @@ impl Mode {
         }
     }
 
-    fn is_not_fresh_bulk(self) -> bool {
-        match self {
-            Mode::FreshBulk => false,
-            Mode::Bulk => true,
-            Mode::Normal => false,
-        }
-    }
-
     fn to_sql_query_str(self) -> &'static str {
         match self {
             Mode::FreshBulk => include_str!("pg/mode_fresh.sql"),
@@ -511,11 +503,6 @@ impl InsertThread {
                         &tx_ids,
                     ));
 
-                    pending_queries.push(vec![format!(
-                        "UPDATE indexer_state SET height = {};",
-                        max_block_height
-                    )]);
-
                     execute_bulk_insert_transcation(
                         &conn,
                         "all block data",
@@ -587,7 +574,7 @@ impl Postresql {
     pub fn new(node_chain_head_height: BlockHeight) -> Result<Self> {
         let connection = establish_connection()?;
         Self::init(&connection)?;
-        let (height, mode) = Self::read_indexer_state(&connection)?;
+        let mode = Self::read_indexer_state(&connection)?;
         let mut s = Postresql {
             connection,
             pipeline: None,
@@ -605,15 +592,12 @@ impl Postresql {
             s.self_test()?;
         }
         s.set_schema_to_mode(s.mode)?;
-        if s.mode == Mode::Bulk {
-            s.wipe_inconsistent_data(height)?;
-        }
         s.start_workers();
         Ok(s)
     }
 
-    fn read_indexer_state(conn: &Connection) -> Result<(Option<u64>, Mode)> {
-        let state = conn.query("SELECT bulk_mode, height FROM indexer_state", &[])?;
+    fn read_indexer_state(conn: &Connection) -> Result<Mode> {
+        let state = conn.query("SELECT bulk_mode FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
             let is_bulk_mode = state.get(0);
             let mode = if is_bulk_mode {
@@ -632,36 +616,19 @@ impl Postresql {
                 Mode::Normal
             };
 
-            Ok((state.get::<_, Option<i64>>(1).map(|h| h as u64), mode))
+            Ok(mode)
         } else {
             conn.execute(
-                "INSERT INTO indexer_state (bulk_mode, height) VALUES ($1, NULL)",
+                "INSERT INTO indexer_state (bulk_mode) VALUES ($1)",
                 &[&true],
             )?;
-            Ok((None, Mode::FreshBulk))
+            Ok(Mode::FreshBulk)
         }
     }
 
     fn init(conn: &Connection) -> Result<()> {
         info!("Creating initial db schema");
         conn.batch_execute(include_str!("pg/init_base.sql"))?;
-        Ok(())
-    }
-
-    /// Wipe all the data that might have been added, before a `block` entry
-    /// was commited to the DB.
-    ///
-    /// `Blocks` is  the last table to have data inserted, and is
-    /// used as a commitment that everything else was inserted already..
-    fn wipe_inconsistent_data(&mut self, height: Option<BlockHeight>) -> Result<()> {
-        // there could be no inconsistent date outside of bulk mode
-        if self.mode.is_not_fresh_bulk() {
-            if let Some(height) = height {
-                info!("Deleting potentially inconsistent data from previous bulk run");
-                self.wipe_to_height(height)?;
-            }
-        }
-
         Ok(())
     }
 

@@ -1,6 +1,5 @@
 CREATE TABLE IF NOT EXISTS indexer_state (
-  bulk_mode BOOLEAN NOT NULL,
-  height BIGINT
+  bulk_mode BOOLEAN NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS block (
