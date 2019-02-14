@@ -332,7 +332,8 @@ type BlocksInFlight = HashSet<BlockHash>;
 /// Reponsible for actually inserting data into the db.
 struct InsertThread {
     tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
-    blocks_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    processing_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    writer_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
 // TODO: fail the whole Pipeline somehow
@@ -401,12 +402,14 @@ impl InsertThread {
         // improve performance, and  more things in flight means
         // incrased memory usage.
         let (tx, rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
+        let (writer_tx, writer_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<Vec<String>>, HashMap<BlockHash, i64>, u64, usize)>(0);
 
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
-        let worker_thread = std::thread::spawn({
+        let processing_thread = std::thread::spawn({
             let conn = establish_connection()?;
-            fn_log_err("pg_worker", move || {
+            fn_log_err("pg_processing", move || {
                 let mut next_block_id = read_next_block_id(&conn)?;
                 let mut next_tx_id = read_next_tx_id(&conn)?;
                 let mut next_output_id = read_next_output_id(&conn)?;
@@ -416,9 +419,11 @@ impl InsertThread {
                     let mut outputs: Vec<super::Output> = vec![];
                     let mut inputs: Vec<super::Input> = vec![];
                     let mut pending_queries = vec![];
+                    let mut tx_len = 0;
 
                     for mut parsed in parsed {
                         blocks.push(parsed.block);
+                        tx_len += parsed.txs.len();
                         txs.append(&mut parsed.txs);
                         outputs.append(&mut parsed.outputs);
                         inputs.append(&mut parsed.inputs);
@@ -467,19 +472,17 @@ impl InsertThread {
                         utxo_lock.consume(inputs.iter().map(|i| i.out_point));
                     drop(utxo_lock);
 
-                    // In `normal` mode, we have not yet (potentially) marked blocks
-                    // orphaned by currently inserted ones, as such
-                    // using query that was created in first thread of the pipeline (blocks),
-                    // which is now sitting in `pending_queries`. You might wonder if that means,
+                    // We're fetching utxos, before marking any blocks potentially
+                    // orphaned by currently inserted ones. You might wonder if that means,
                     // we could potentially pick ids of `output`s that will be orphaned.
                     // Fortunately it's not a problem. If `output` like that was to be orphaned, and re-added,
                     // it would have to be in the blocks we're processing and therfore can not
-                    // be "missing", as we already must have added to a cache. This is howerver quite
+                    // be "missing", as we already must have added it to a cache. This is howerver quite
                     // subtle, so worth remembering about, and thinking about again.
                     //
                     // To rephrase: correctness of this fetching getting fresh IDs,
                     // depends on all possible valid outputs being either in the UTXO cache,
-                    // or having any duplicates from orphaned blocks already marked
+                    // or having any previous instances from orphaned blocks already marked
                     // as such.
                     let missing = UtxoSetCache::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
@@ -503,15 +506,37 @@ impl InsertThread {
                         &tx_ids,
                     ));
 
+                    writer_tx
+                        .send((batch_id, pending_queries, block_ids, max_block_height, tx_len))
+                        .expect("Send not fail");
+                }
+                Ok(())
+            })
+        });
+
+        let writer_thread = std::thread::spawn({
+            let conn = establish_connection()?;
+            fn_log_err("pg_writer", move || {
+                let mut prev_time = std::time::Instant::now();
+                while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) = writer_rx.recv() {
                     execute_bulk_insert_transcation(
                         &conn,
                         "all block data",
                         block_ids.len(),
                         batch_id,
-                        pending_queries.into_iter().flatten(),
+                        queries.into_iter().flatten(),
                     )?;
 
-                    info!("Block {}H fully indexed and commited", max_block_height);
+                    let current_time = std::time::Instant::now();
+                    let duration = current_time.duration_since(prev_time);
+                    prev_time = current_time;
+
+                    info!(
+                        "Block {}H fully indexed and commited; {}block/s; {}tx/s",
+                        max_block_height,
+                        block_ids.len() as u64 / duration.as_secs(),
+                        tx_len as u64 / duration.as_secs(),
+                    );
 
                     let mut any_missing = false;
                     let mut lock = in_flight.lock().unwrap();
@@ -522,13 +547,15 @@ impl InsertThread {
                     drop(lock);
                     assert!(!any_missing);
                 }
+
                 Ok(())
             })
         });
 
         Ok(InsertThread {
             tx: Some(tx),
-            blocks_thread: Some(worker_thread),
+            processing_thread: Some(processing_thread),
+            writer_thread: Some(writer_thread),
         })
     }
 }
@@ -537,7 +564,10 @@ impl Drop for InsertThread {
     fn drop(&mut self) {
         drop(self.tx.take());
 
-        let joins = vec![self.blocks_thread.take().unwrap()];
+        let joins = vec![
+            self.processing_thread.take().unwrap(),
+            self.writer_thread.take().unwrap(),
+        ];
 
         for join in joins {
             join.join()
