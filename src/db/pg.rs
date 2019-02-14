@@ -402,8 +402,13 @@ impl InsertThread {
         // improve performance, and  more things in flight means
         // incrased memory usage.
         let (tx, rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
-        let (writer_tx, writer_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<Vec<String>>, HashMap<BlockHash, i64>, u64, usize)>(0);
+        let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
+            u64,
+            Vec<Vec<String>>,
+            HashMap<BlockHash, i64>,
+            u64,
+            usize,
+        )>(0);
 
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
@@ -507,7 +512,13 @@ impl InsertThread {
                     ));
 
                     writer_tx
-                        .send((batch_id, pending_queries, block_ids, max_block_height, tx_len))
+                        .send((
+                            batch_id,
+                            pending_queries,
+                            block_ids,
+                            max_block_height,
+                            tx_len,
+                        ))
                         .expect("Send not fail");
                 }
                 Ok(())
@@ -518,7 +529,9 @@ impl InsertThread {
             let conn = establish_connection()?;
             fn_log_err("pg_writer", move || {
                 let mut prev_time = std::time::Instant::now();
-                while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) = writer_rx.recv() {
+                while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) =
+                    writer_rx.recv()
+                {
                     execute_bulk_insert_transcation(
                         &conn,
                         "all block data",
@@ -534,8 +547,10 @@ impl InsertThread {
                     info!(
                         "Block {}H fully indexed and commited; {}block/s; {}tx/s",
                         max_block_height,
-                        block_ids.len() as u64 / duration.as_secs(),
-                        tx_len as u64 / duration.as_secs(),
+                        (block_ids.len() as u64 * 1000)
+                            / (duration.as_secs() as u64 * 1000 + duration.subsec_millis() as u64),
+                        (tx_len as u64 * 1000)
+                            / (duration.as_secs() as u64 * 1000 + duration.subsec_millis() as u64),
                     );
 
                     let mut any_missing = false;
