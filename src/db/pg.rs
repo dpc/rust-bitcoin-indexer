@@ -175,7 +175,7 @@ fn create_fetch_outputs_query(outputs: &[OutPoint]) -> Vec<String> {
     SELECT output.id, output.value, tx.hash, output.tx_idx
     FROM output JOIN tx ON (tx.id = output.tx_id)
     JOIN block ON tx.block_id = block.id
-    WHERE block.orphaned = false AND (tx.hash, output.tx_idx) IN ( VALUES "#
+    WHERE block.extinct = false AND (tx.hash, output.tx_idx) IN ( VALUES "#
         .into();
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
@@ -478,16 +478,16 @@ impl InsertThread {
                     drop(utxo_lock);
 
                     // We're fetching utxos, before marking any blocks potentially
-                    // orphaned by currently inserted ones. You might wonder if that means,
-                    // we could potentially pick ids of `output`s that will be orphaned.
-                    // Fortunately it's not a problem. If `output` like that was to be orphaned, and re-added,
+                    // extinct by currently inserted ones. You might wonder if that means,
+                    // we could potentially pick ids of `output`s that will be extinct.
+                    // Fortunately it's not a problem. If `output` like that was to be extinct, and re-added,
                     // it would have to be in the blocks we're processing and therfore can not
                     // be "missing", as we already must have added it to a cache. This is howerver quite
                     // subtle, so worth remembering about, and thinking about again.
                     //
                     // To rephrase: correctness of this fetching getting fresh IDs,
                     // depends on all possible valid outputs being either in the UTXO cache,
-                    // or having any previous instances from orphaned blocks already marked
+                    // or having any previous instances from extinct blocks already marked
                     // as such.
                     let missing = UtxoSetCache::fetch_missing(&conn, missing)?;
                     for (k, v) in missing.into_iter() {
@@ -495,7 +495,7 @@ impl InsertThread {
                     }
 
                     pending_queries.push(vec![format!(
-                        "UPDATE block SET orphaned = true WHERE height >= {};",
+                        "UPDATE block SET extinct = true WHERE height >= {};",
                         min_block_height
                     )]);
                     pending_queries.push(create_bulk_insert_blocks_query(&blocks));
@@ -823,7 +823,7 @@ impl DataStore for Postresql {
         Ok(self
             .connection
             .query(
-                "SELECT hash FROM block WHERE height = $1 AND orphaned = false",
+                "SELECT hash FROM block WHERE height = $1 AND extinct = false",
                 &[&(height as i64)],
             )?
             .iter()
@@ -836,13 +836,13 @@ impl DataStore for Postresql {
             if db_hash != block.id {
                 // we move forward and there is a query in a inseting
                 // pipeline (`reorg_queries`)
-                // that will mark anything above and eq this hight as orphaned
+                // that will mark anything above and eq this hight as extinct
                 info!(
                     "Node block != db block at {}H; {} != {} - reorg",
                     block.height, block.id, db_hash
                 );
             } else {
-                // we already have exact same block, non-orphaned, and we don't want
+                // we already have exact same block, non-extinct, and we don't want
                 // to add it twice
                 trace!(
                     "Skip indexing alredy included block {}H {}",
@@ -930,7 +930,7 @@ impl crate::event_source::EventSource for postgres::Connection {
                 .map(|prev_height| height <= prev_height)
                 .unwrap_or(true)
             {
-                let orphaned = self.query(
+                let extinct = self.query(
                     r#"SELECT id, hash, height
                     FROM block
                     WHERE block.id < $1 AND
@@ -938,7 +938,7 @@ impl crate::event_source::EventSource for postgres::Connection {
                     ORDER BY id DESC;"#,
                     &[&id, &height],
                 )?;
-                for row in &orphaned {
+                for row in &extinct {
                     let _id: i64 = row.get(0);
                     let hash = get_hash(&row, 1);
                     let height: i64 = row.get(2);

@@ -1,5 +1,5 @@
 
-CREATE INDEX IF NOT EXISTS block_orphaned ON block (orphaned);
+CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
 
 DO $$
 BEGIN

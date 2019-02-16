@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS block (
   prev_hash BYTEA NOT NULL,
   merkle_root BYTEA NOT NULL,
   time BIGINT NOT NULL,
-  orphaned BOOLEAN NOT NULL DEFAULT FALSE
+  extinct BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- We always want these two, as a lot of logic is based
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS block (
 -- so it doesn't matter that much
 CREATE INDEX IF NOT EXISTS block_hash ON block (hash);
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
-CREATE UNIQUE INDEX IF NOT EXISTS block_hash_not_orphaned ON block (hash) WHERE orphaned = false;
+CREATE UNIQUE INDEX IF NOT EXISTS block_hash_not_extinct ON block (hash) WHERE extinct = false;
 
 CREATE TABLE IF NOT EXISTS tx (
   id BIGSERIAL NOT NULL, -- defined as PKEY later
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS output (
 );
 
 -- Unfortunately `input` is not simply unique on `output_id`, because there can be
--- multiple inputs created for the same output, some of which were orphaned
+-- multiple inputs created for the same output, some of which were extinct
 CREATE TABLE IF NOT EXISTS input (
   output_id BIGINT NOT NULL, -- output id this tx input spends
   tx_id BIGINT NOT NULL -- tx id this input is from
@@ -55,9 +55,9 @@ CREATE OR REPLACE VIEW address_balance AS
   LEFT JOIN input
     JOIN tx AS input_tx ON input.tx_id = input_tx.id
     JOIN block AS input_block ON input_tx.block_id = input_block.id
-  ON output.id = input.output_id AND input_block.orphaned = false
+  ON output.id = input.output_id AND input_block.extinct = false
   WHERE
-    output_block.orphaned = false
+    output_block.extinct = false
   GROUP BY
     output.address;
 
@@ -73,11 +73,11 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
     JOIN tx AS input_tx ON input.tx_id = input_tx.id
     JOIN block AS input_block ON input_tx.block_id = input_block.id
   ON output.id = input.output_id AND
-    input_block.orphaned = false AND
+    input_block.extinct = false AND
     input_block.height <= block.height
   WHERE
-    block.orphaned = false AND
-    output_block.orphaned = false
+    block.extinct = false AND
+    output_block.extinct = false
   GROUP BY
     block.height,
     output.address

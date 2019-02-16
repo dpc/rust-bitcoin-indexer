@@ -1,4 +1,4 @@
-DROP INDEX IF EXISTS block_orphaned;
+DROP INDEX IF EXISTS block_extinct;
 
 DO $$
 BEGIN

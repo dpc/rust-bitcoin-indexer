@@ -1,4 +1,4 @@
-DROP INDEX IF EXISTS block_orphaned;
+DROP INDEX IF EXISTS block_extinct;
 
 -- we need it in bulk for wipe_inconsistent_data
 DO $$
