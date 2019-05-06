@@ -1,14 +1,15 @@
 use criterion::Criterion;
 use criterion::{criterion_group, criterion_main};
 
-use bitcoin::util::hash::Sha256dHash;
+use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+use bitcoin_hashes::hex::FromHex;
+use bitcoincore_rpc::RpcApi;
 
 fn get_rpc() -> bitcoincore_rpc::Client {
     bitcoincore_rpc::Client::new(
         "http://localhost:8332".into(),
-        Some("user".into()),
-        Some("magicpassword".into()),
-    )
+        bitcoincore_rpc::Auth::UserPass("user".into(),"magicpassword".into()),
+    ).expect("rpc client creation")
 }
 
 const BLOCK_HASH: &str = "00000000000000000013e7c4a60f1aa0e07ed1efb08accbe684602f7bdc7385f";

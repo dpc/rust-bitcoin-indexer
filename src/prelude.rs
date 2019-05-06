@@ -1,6 +1,7 @@
 use bitcoin::util::address;
 pub use default::default;
 pub use insideout::InsideOut;
+use failure::bail;
 
 pub mod bitcoin_core {
     pub use bitcoin::{
@@ -9,8 +10,9 @@ pub mod bitcoin_core {
             transaction::{Transaction, TxIn, TxOut},
         },
         consensus::Decodable,
-        util::{hash::Hash160, privkey::Privkey},
+        util::key::PrivateKey,
     };
+    pub use bitcoin_hashes::hash160::Hash as Hash160;
 }
 
 pub type BlockHeight = u64;
@@ -20,7 +22,10 @@ pub struct BlockHeightAndHash {
     pub hash: BlockHash,
 }
 
-pub use bitcoin::util::hash::Sha256dHash;
+pub use bitcoin_hashes::hash160::Hash as Hash160;
+pub use bitcoin_hashes::hex::FromHex as _;
+pub use bitcoin_hashes::Hash as _;
+pub use bitcoin_hashes::sha256d::Hash as Sha256dHash;
 pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 pub type TxHash = Sha256dHash;
@@ -38,19 +43,28 @@ pub struct Block<H, D = ()> {
     pub data: D,
 }
 
+pub use common_failures::Result;
+
 /// Block data from BitcoinCore (`rust-bitcoin`)
 pub type BlockCore = Block<BlockHash, bitcoin_core::Block>;
 
 #[derive(Clone, Debug)]
 pub struct RpcInfo {
     pub url: String,
-    pub user: Option<String>,
-    pub password: Option<String>,
+    pub auth: bitcoincore_rpc::Auth,
 }
 
 impl RpcInfo {
-    pub fn to_rpc_client(&self) -> bitcoincore_rpc::Client {
-        bitcoincore_rpc::Client::new(self.url.clone(), self.user.clone(), self.password.clone())
+    pub fn new(url: String, user: Option<String>, pass: Option<String>) -> Result<Self> {
+        let auth = match (user, pass) {
+            (Some(u), Some(p)) => bitcoincore_rpc::Auth::UserPass(u.clone(), p.clone()),
+            (None, None) => bitcoincore_rpc::Auth::None,
+            _ => bail!("Incorrect node auth parameters"),
+        };
+        Ok(Self {url, auth })
+    }
+    pub fn to_rpc_client(&self) -> Result<bitcoincore_rpc::Client> {
+        Ok(bitcoincore_rpc::Client::new(self.url.clone(), self.auth.clone())?)
     }
 }
 
@@ -72,20 +86,12 @@ pub fn address_from_script(
 ) -> Option<address::Address> {
     Some(address::Address {
         payload: if script.is_p2sh() {
-            address::Payload::ScriptHash(script.as_bytes()[2..22].into())
+            address::Payload::ScriptHash(Hash160::from_slice(&script.as_bytes()[2..22]).expect("correct data"))
         } else if script.is_p2pkh() {
-            address::Payload::PubkeyHash(script.as_bytes()[3..23].into())
+            address::Payload::PubkeyHash(Hash160::from_slice(&script.as_bytes()[3..23]).expect("correct data"))
         } else if script.is_p2pk() {
-            let pubkey = match secp256k1::key::PublicKey::from_slice(
-                &script.as_bytes()[1..(script.len() - 1)],
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Couldn't parse public-key in script {}; {}", script, e);
-                    return None;
-                }
-            };
-            address::Payload::Pubkey(pubkey)
+            // no address format for p2kp
+            return None
         } else if script.is_v0_p2wsh() {
             address::Payload::WitnessProgram(
                 bitcoin_bech32::WitnessProgram::new(

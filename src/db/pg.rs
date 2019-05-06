@@ -21,7 +21,7 @@ pub fn establish_connection() -> Result<Connection> {
 fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
     let mut human_bytes = row.get::<_, Vec<u8>>(index);
     human_bytes.reverse();
-    BlockHash::from(human_bytes.as_slice())
+    BlockHash::from_slice(human_bytes.as_slice()).expect("correct hash")
 }
 
 fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
@@ -556,7 +556,7 @@ impl InsertThread {
                     let mut any_missing = false;
                     let mut lock = in_flight.lock().unwrap();
                     for hash in block_ids.keys() {
-                        let missing = !lock.remove(&hash);
+                        let missing = !lock.remove(hash);
                         any_missing = any_missing || missing;
                     }
                     drop(lock);

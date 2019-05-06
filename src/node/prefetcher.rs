@@ -12,6 +12,7 @@ use std::{
     },
     time::Duration,
 };
+use bitcoincore_rpc::RpcApi;
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     let delay_ms = 100;
@@ -34,11 +35,11 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
 
 impl Rpc for bitcoincore_rpc::Client {
     type Data = bitcoin::Block;
-    type Id = bitcoin::util::hash::Sha256dHash;
+    type Id = Sha256dHash;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 1000;
 
     fn get_block_count(&self) -> Result<u64> {
-        Ok(self.get_block_count()?)
+        Ok(RpcApi::get_block_count(self)?)
     }
 
     fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {

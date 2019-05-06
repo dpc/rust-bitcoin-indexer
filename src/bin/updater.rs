@@ -1,17 +1,18 @@
 use bitcoin_indexer::{db, node::fetcher, opts, prelude::*, utils::reversed};
 use itertools::Itertools;
 use std::sync::Arc;
+use std::borrow::Borrow;
 
-use common_failures::{prelude::*, quick_main};
+use common_failures::{quick_main};
 
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = RpcInfo {
-        url: opts.node_rpc_url,
-        user: opts.node_rpc_user,
-        password: opts.node_rpc_pass,
-    };
+    let rpc_info = RpcInfo::new(
+        opts.node_rpc_url,
+        opts.node_rpc_user,
+        opts.node_rpc_pass,
+    )?;
     let db = db::pg::establish_connection()?;
     db.execute(
         "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS merkle_root BYTEA",
@@ -22,11 +23,7 @@ fn run() -> Result<()> {
         &[],
     )?;
 
-    let rpc = bitcoincore_rpc::Client::new(
-        rpc_info.url.clone(),
-        rpc_info.user.clone(),
-        rpc_info.password.clone(),
-    );
+    let rpc = rpc_info.to_rpc_client()?;
     let fetcher = fetcher::Fetcher::new(Arc::new(rpc), None, None)?;
 
     for batch in &fetcher.chunks(1000) {
@@ -39,8 +36,8 @@ fn run() -> Result<()> {
                 "UPDATE blocks SET time = $1, merkle_root = $2 WHERE hash = $3",
                 &[
                     &(i64::from(item.data.header.time)),
-                    &reversed(item.data.header.merkle_root.to_bytes().to_vec()),
-                    &reversed(item.id.to_bytes().to_vec()),
+                    &reversed({ let borrow : &[u8] = item.data.header.merkle_root.borrow(); borrow }.to_vec()),
+                    &reversed({ let borrow: &[u8] = item.id.borrow(); borrow }.to_vec()),
                 ],
             )?;
         }

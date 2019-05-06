@@ -8,6 +8,7 @@ use bitcoin_indexer::{
 };
 use log::info;
 use std::sync::Arc;
+use bitcoincore_rpc::RpcApi;
 
 use common_failures::{prelude::*, quick_main};
 
@@ -19,11 +20,7 @@ struct Indexer {
 
 impl Indexer {
     fn new(rpc_info: RpcInfo) -> Result<Self> {
-        let rpc = bitcoincore_rpc::Client::new(
-            rpc_info.url.clone(),
-            rpc_info.user.clone(),
-            rpc_info.password.clone(),
-        );
+        let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()?;
         let mut db = db::pg::Postresql::new(node_starting_chainhead_height)?;
@@ -76,11 +73,11 @@ impl Indexer {
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = RpcInfo {
-        url: opts.node_rpc_url,
-        user: opts.node_rpc_user,
-        password: opts.node_rpc_pass,
-    };
+    let rpc_info = RpcInfo::new(
+        opts.node_rpc_url,
+        opts.node_rpc_user,
+        opts.node_rpc_pass,
+    )?;
 
     if opts.wipe_db {
         db::pg::Postresql::wipe()?;

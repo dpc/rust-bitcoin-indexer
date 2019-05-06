@@ -4,7 +4,6 @@ pub mod pg;
 use crate::prelude::*;
 use common_failures::prelude::*;
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
 pub trait DataStore {
     fn wipe_to_height(&mut self, height: u64) -> Result<()>;
@@ -155,10 +154,10 @@ fn parse_node_block(block_core: &crate::BlockCore) -> Result<Parsed> {
             // https://blockchair.com/bitcoin/block/91842
             // to make the unique indexes happy, we just add one to last byte
 
-            TxHash::from_str("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
+            TxHash::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
                 .unwrap()
         } else if block_core.height == 91880 && coinbase {
-            TxHash::from_str("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
+            TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
                 .unwrap()
         } else {
             tx.txid()
