@@ -2,16 +2,25 @@
 
 An experiment in indexing Bitcoin, in Rust.
 
-Query blocks using JsonRPC, dump them into Postgres. After reaching
+Query blocks using JsonRPC, dump them into Postgres in an append-only format,
+suitable for querying, as much as event-sourcing-like handling. After reaching
 chain-head, keep indexing in real-time and handle reorgs.
 
-WIP, Goals:
+This started as an education experiment, but is quite useful and advanced already.
+
+
+Original goals:
 
 * check how much code is realistically necessary
 * check how simple/complex can it be
 * check Rust ecosystem support (`rust-bitcoin` mostly)
 * check performance and see how much can it be optimized
 * check unkown unknows and own knowledge
+
+Read [How to interact with a blockchain](https://dpc.pw/rust-bitcoin-indexer-how-to-interact-with-a-blockchain) for knowledge sharing, discoveries and design-decisions.
+
+Status: The codebase is very simple, design quite clean and composable and performance really good.
+Some tests are there and everything seems quite robust, but not used in production ever so far. 
 
 
 ## Running
