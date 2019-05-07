@@ -80,14 +80,9 @@ you should carefully review this section.
 
 On software level `pg.rs` already implements the following optimizations:
 
-* **until reaching the chain-head all tables are `UNLOGGED`**; this gives
-  great speed boost, but is **not crash-resistant**; keep your Postgresql
-  stable; in case of it crashing during initial sync, you will have to
-  start from scratch;
-* inserts are made using multi-row value inserts;
+* inserts are made using multi-row value insert statements;
 * multiple multi-row insert statements are batched into one transaction;
 * initial sync starts with no indices and utxo set is cached in memory;
-  try not to stop the indexer once started;
 * once restarted, missing UTXOs are fetched from the db, but new ones
   are still being cached in memory;
 * once restarted, only minimum indices are created (for UTXO fetching)

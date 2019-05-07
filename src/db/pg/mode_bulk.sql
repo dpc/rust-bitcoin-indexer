@@ -51,8 +51,3 @@ ALTER TABLE output SET (
 ALTER TABLE input SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
-
-ALTER TABLE block SET UNLOGGED;
-ALTER TABLE tx SET UNLOGGED;
-ALTER TABLE output SET UNLOGGED;
-ALTER TABLE input SET UNLOGGED;
