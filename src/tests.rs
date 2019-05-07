@@ -170,7 +170,7 @@ impl Rpc for TestRpc {
         Ok(inner.chain.len().saturating_sub(1) as u64)
     }
 
-    fn get_block_id_by_height(&self, height: prelude::BlockHeight) -> Result<Option<Self::Id>> {
+    fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {
         let inner = self.inner.lock().unwrap();
         let res = inner
             .chain

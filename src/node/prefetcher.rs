@@ -1,5 +1,6 @@
 use log::{debug, info, trace};
 
+use crate::{Sha256dHash,  BlockHeight, Block};
 use crate::prelude::*;
 use crate::{Rpc, RpcBlock, RpcBlockWithPrevId};
 use common_failures::prelude::*;

@@ -1,5 +1,5 @@
-use crate::prelude::Block;
-use common_failures::*;
+use crate::Block;
+use crate::prelude::*;
 
 /// Block Event source...
 ///

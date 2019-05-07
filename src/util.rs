@@ -1,3 +1,5 @@
+pub mod bitcoin;
+
 pub fn reversed<I, II, IT>(i: I) -> I
 where
     I: IntoIterator<IntoIter = II, Item = IT>,

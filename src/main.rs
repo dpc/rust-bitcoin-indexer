@@ -5,6 +5,8 @@ use bitcoin_indexer::{
     node::prefetcher,
     opts,
     prelude::*,
+    RpcInfo,
+    types::*,
 };
 use log::info;
 use std::sync::Arc;
@@ -73,7 +75,7 @@ impl Indexer {
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = RpcInfo::new(
+    let rpc_info = bitcoin_indexer::RpcInfo::new(
         opts.node_rpc_url,
         opts.node_rpc_user,
         opts.node_rpc_pass,

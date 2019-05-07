@@ -1,4 +1,4 @@
-use bitcoin_indexer::{db, node::fetcher, opts, prelude::*, utils::reversed};
+use bitcoin_indexer::{db, node::fetcher, opts, prelude::*, util::reversed};
 use itertools::Itertools;
 use std::sync::Arc;
 use std::borrow::Borrow;
@@ -8,7 +8,7 @@ use common_failures::{quick_main};
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = RpcInfo::new(
+    let rpc_info = bitcoin_indexer::RpcInfo::new(
         opts.node_rpc_url,
         opts.node_rpc_user,
         opts.node_rpc_pass,

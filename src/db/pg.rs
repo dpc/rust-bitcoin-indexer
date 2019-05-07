@@ -1,8 +1,8 @@
 use log::{debug, error, info, trace};
 
+use crate::{OutPoint, Block};
 use super::*;
 use crate::db;
-use crate::prelude::*;
 use dotenv::dotenv;
 use postgres::{Connection, TlsMode};
 use rayon::prelude::*;
@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{env, fmt, fmt::Write};
+use crate::{BlockHash,  BlockHeight};
 
 pub fn establish_connection() -> Result<Connection> {
     dotenv()?;

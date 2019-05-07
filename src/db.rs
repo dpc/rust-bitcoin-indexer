@@ -2,8 +2,9 @@ pub mod mem;
 pub mod pg;
 
 use crate::prelude::*;
-use common_failures::prelude::*;
 use std::collections::BTreeMap;
+use crate::TxHash;
+use crate::types::*;
 
 pub trait DataStore {
     fn wipe_to_height(&mut self, height: u64) -> Result<()>;
@@ -26,7 +27,7 @@ struct Block {
     pub height: BlockHeight,
     pub hash: BlockHash,
     pub prev_hash: BlockHash,
-    pub merkle_root: Sha256dHash,
+    pub merkle_root: crate::Sha256dHash,
     pub time: u32,
 }
 
@@ -57,7 +58,7 @@ impl Tx {
     pub fn from_core_block(
         info: &crate::BlockCore,
         tx_id: TxHash,
-        tx: &bitcoin_core::Transaction,
+        tx: &crate::Transaction,
     ) -> Self {
         let coinbase = tx.is_coin_base();
         Self {
@@ -84,9 +85,9 @@ impl Output {
     pub fn from_core_block(
         _info: &crate::BlockCore,
         tx_id: TxHash,
-        tx: &bitcoin_core::Transaction,
+        tx: &crate::Transaction,
         idx: u32,
-        tx_out: &bitcoin_core::TxOut,
+        tx_out: &crate::TxOut,
     ) -> Self {
         let network = bitcoin::network::constants::Network::Bitcoin;
         Self {
@@ -95,7 +96,7 @@ impl Output {
                 vout: idx,
             },
             value: tx_out.value,
-            address: address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
+            address: crate::util::bitcoin::address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
             coinbase: tx.is_coin_base(),
         }
     }
@@ -115,7 +116,7 @@ impl Input {
     pub fn from_core_block(
         _info: &crate::BlockCore,
         tx_id: TxHash,
-        tx_in: &bitcoin_core::TxIn,
+        tx_in: &crate::TxIn,
     ) -> Self {
         Input {
             out_point: OutPoint {
