@@ -11,6 +11,7 @@ use bitcoin_indexer::{
 use log::info;
 use std::sync::Arc;
 use bitcoincore_rpc::RpcApi;
+use bitcoin_indexer::util::BottleCheck;
 
 use common_failures::{prelude::*, quick_main};
 
@@ -18,6 +19,7 @@ struct Indexer {
     node_starting_chainhead_height: u64,
     rpc: Arc<bitcoincore_rpc::Client>,
     db: Box<dyn db::DataStore>,
+    bottlecheck_db: BottleCheck,
 }
 
 impl Indexer {
@@ -28,10 +30,11 @@ impl Indexer {
         let mut db = db::pg::Postresql::new(node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
-        Ok(Self {
+        Ok  (Self {
             rpc,
             node_starting_chainhead_height,
             db: Box::new(db),
+            bottlecheck_db: BottleCheck::new("database".into()),
         })
     }
 
@@ -41,7 +44,13 @@ impl Indexer {
             eprintln!("Block {}H: {}", block.height, block.id);
         }
 
-        self.db.insert(block)?;
+        let Self {
+            ref mut db,
+            ref mut bottlecheck_db,
+            ..
+        } = self;
+
+        bottlecheck_db.check(|| db.insert(block))?;
         Ok(())
     }
 
@@ -64,7 +73,8 @@ impl Indexer {
         };
 
         let prefetcher = prefetcher::Prefetcher::new(self.rpc.clone(), start)?;
-        for item in prefetcher {
+        let mut bottlecheck_fetcher = BottleCheck::new("block fetcher".into());
+        for item in bottlecheck_fetcher.check_iter(prefetcher) {
             self.process_block(item)?;
         }
 

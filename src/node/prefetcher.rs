@@ -317,8 +317,7 @@ where
                     "Waiting for the block from the workers at: {}H",
                     self.cur_height
                 );
-                let item = self
-                    .rx
+                let item = self.rx
                     .as_ref()
                     .expect("rx available")
                     .recv()
