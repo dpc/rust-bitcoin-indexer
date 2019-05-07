@@ -1,5 +1,4 @@
-use crate::Block;
-use crate::prelude::*;
+use crate::{prelude::*, Block};
 
 /// Block Event source...
 ///

@@ -1,18 +1,14 @@
 use bitcoin_indexer::{db, node::fetcher, opts, prelude::*, util::reversed};
 use itertools::Itertools;
-use std::sync::Arc;
-use std::borrow::Borrow;
+use std::{borrow::Borrow, sync::Arc};
 
-use common_failures::{quick_main};
+use common_failures::quick_main;
 
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = bitcoin_indexer::RpcInfo::new(
-        opts.node_rpc_url,
-        opts.node_rpc_user,
-        opts.node_rpc_pass,
-    )?;
+    let rpc_info =
+        bitcoin_indexer::RpcInfo::new(opts.node_rpc_url, opts.node_rpc_user, opts.node_rpc_pass)?;
     let db = db::pg::establish_connection()?;
     db.execute(
         "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS merkle_root BYTEA",
@@ -36,8 +32,20 @@ fn run() -> Result<()> {
                 "UPDATE blocks SET time = $1, merkle_root = $2 WHERE hash = $3",
                 &[
                     &(i64::from(item.data.header.time)),
-                    &reversed({ let borrow : &[u8] = item.data.header.merkle_root.borrow(); borrow }.to_vec()),
-                    &reversed({ let borrow: &[u8] = item.id.borrow(); borrow }.to_vec()),
+                    &reversed(
+                        {
+                            let borrow: &[u8] = item.data.header.merkle_root.borrow();
+                            borrow
+                        }
+                        .to_vec(),
+                    ),
+                    &reversed(
+                        {
+                            let borrow: &[u8] = item.id.borrow();
+                            borrow
+                        }
+                        .to_vec(),
+                    ),
                 ],
             )?;
         }

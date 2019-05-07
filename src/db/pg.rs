@@ -1,16 +1,17 @@
 use log::{debug, error, info, trace};
 
-use crate::{OutPoint, Block};
 use super::*;
-use crate::db;
+use crate::{db, Block, BlockHash, BlockHeight, OutPoint};
 use dotenv::dotenv;
 use postgres::{Connection, TlsMode};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use std::{env, fmt, fmt::Write};
-use crate::{BlockHash,  BlockHeight};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    fmt::{self, Write},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 pub fn establish_connection() -> Result<Connection> {
     dotenv()?;

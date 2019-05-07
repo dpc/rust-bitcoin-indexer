@@ -1,4 +1,2 @@
-pub mod prefetcher;
 pub mod fetcher;
-
-
+pub mod prefetcher;

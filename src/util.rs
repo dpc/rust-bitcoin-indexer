@@ -1,7 +1,7 @@
 pub mod bitcoin;
 
-use std::time::{Instant, Duration};
 use log::info;
+use std::time::{Duration, Instant};
 
 pub struct BottleCheck {
     accumulated: std::time::Duration,
@@ -14,7 +14,6 @@ impl BottleCheck {
             name,
             accumulated: Duration::default(),
         }
-
     }
     pub fn check<T>(&mut self, f: impl FnOnce() -> T) -> T {
         let start = Instant::now();
@@ -27,11 +26,11 @@ impl BottleCheck {
         res
     }
 
-    pub fn check_iter<I>(&mut self, iter: I) -> BottleCheckIter<I> where I : Iterator{
-        BottleCheckIter {
-            inner: self,
-            iter
-        }
+    pub fn check_iter<I>(&mut self, iter: I) -> BottleCheckIter<I>
+    where
+        I: Iterator,
+    {
+        BottleCheckIter { inner: self, iter }
     }
 }
 
@@ -40,7 +39,10 @@ pub struct BottleCheckIter<'a, I> {
     iter: I,
 }
 
-impl<'a, I> Iterator for BottleCheckIter<'a, I> where I:Iterator {
+impl<'a, I> Iterator for BottleCheckIter<'a, I>
+where
+    I: Iterator,
+{
     type Item = <I as Iterator>::Item;
 
     fn next(&mut self) -> Option<Self::Item> {

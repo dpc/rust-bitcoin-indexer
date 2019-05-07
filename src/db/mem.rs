@@ -1,7 +1,6 @@
 use super::*;
-use crate::db;
+use crate::{db, BlockCore, BlockHash, BlockHeight};
 use common_failures::prelude::*;
-use crate::{BlockHeight, BlockHash, BlockCore};
 
 #[derive(Default)]
 pub struct MemDataStore {

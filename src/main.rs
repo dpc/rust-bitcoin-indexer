@@ -5,13 +5,13 @@ use bitcoin_indexer::{
     node::prefetcher,
     opts,
     prelude::*,
-    RpcInfo,
     types::*,
+    util::BottleCheck,
+    RpcInfo,
 };
+use bitcoincore_rpc::RpcApi;
 use log::info;
 use std::sync::Arc;
-use bitcoincore_rpc::RpcApi;
-use bitcoin_indexer::util::BottleCheck;
 
 use common_failures::{prelude::*, quick_main};
 
@@ -30,7 +30,7 @@ impl Indexer {
         let mut db = db::pg::Postresql::new(node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
-        Ok  (Self {
+        Ok(Self {
             rpc,
             node_starting_chainhead_height,
             db: Box::new(db),
@@ -85,11 +85,8 @@ impl Indexer {
 fn run() -> Result<()> {
     env_logger::init();
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info = bitcoin_indexer::RpcInfo::new(
-        opts.node_rpc_url,
-        opts.node_rpc_user,
-        opts.node_rpc_pass,
-    )?;
+    let rpc_info =
+        bitcoin_indexer::RpcInfo::new(opts.node_rpc_url, opts.node_rpc_user, opts.node_rpc_pass)?;
 
     if opts.wipe_db {
         db::pg::Postresql::wipe()?;

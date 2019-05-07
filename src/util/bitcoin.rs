@@ -1,6 +1,5 @@
+use crate::{types::*, Hash160};
 use bitcoin::util::address;
-use crate::{Hash160};
-use crate::types::*;
 
 fn bech_network(
     network: bitcoin::network::constants::Network,
@@ -20,12 +19,16 @@ pub fn address_from_script(
 ) -> Option<address::Address> {
     Some(address::Address {
         payload: if script.is_p2sh() {
-            address::Payload::ScriptHash(Hash160::from_slice(&script.as_bytes()[2..22]).expect("correct data"))
+            address::Payload::ScriptHash(
+                Hash160::from_slice(&script.as_bytes()[2..22]).expect("correct data"),
+            )
         } else if script.is_p2pkh() {
-            address::Payload::PubkeyHash(Hash160::from_slice(&script.as_bytes()[3..23]).expect("correct data"))
+            address::Payload::PubkeyHash(
+                Hash160::from_slice(&script.as_bytes()[3..23]).expect("correct data"),
+            )
         } else if script.is_p2pk() {
             // no address format for p2kp
-            return None
+            return None;
         } else if script.is_v0_p2wsh() {
             address::Payload::WitnessProgram(
                 bitcoin_bech32::WitnessProgram::new(

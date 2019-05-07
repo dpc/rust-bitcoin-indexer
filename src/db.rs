@@ -1,10 +1,8 @@
 pub mod mem;
 pub mod pg;
 
-use crate::prelude::*;
+use crate::{prelude::*, types::*, TxHash};
 use std::collections::BTreeMap;
-use crate::TxHash;
-use crate::types::*;
 
 pub trait DataStore {
     fn wipe_to_height(&mut self, height: u64) -> Result<()>;
@@ -96,7 +94,8 @@ impl Output {
                 vout: idx,
             },
             value: tx_out.value,
-            address: crate::util::bitcoin::address_from_script(&tx_out.script_pubkey, network).map(|a| a.to_string()),
+            address: crate::util::bitcoin::address_from_script(&tx_out.script_pubkey, network)
+                .map(|a| a.to_string()),
             coinbase: tx.is_coin_base(),
         }
     }
@@ -113,11 +112,7 @@ struct Input {
 }
 
 impl Input {
-    pub fn from_core_block(
-        _info: &crate::BlockCore,
-        tx_id: TxHash,
-        tx_in: &crate::TxIn,
-    ) -> Self {
+    pub fn from_core_block(_info: &crate::BlockCore, tx_id: TxHash, tx_in: &crate::TxIn) -> Self {
         Input {
             out_point: OutPoint {
                 txid: tx_in.previous_output.txid,

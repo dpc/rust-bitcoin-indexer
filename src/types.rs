@@ -1,11 +1,7 @@
-
-pub use bitcoin_hashes::hex::FromHex as _;
-pub use bitcoin_hashes::Hash as _;
+pub use bitcoin_hashes::{hex::FromHex as _, Hash as _};
 
 pub use bitcoin::{
-    blockdata::{
-        transaction::{Transaction, TxIn, TxOut},
-    },
+    blockdata::transaction::{Transaction, TxIn, TxOut},
     consensus::Decodable,
     util::key::PrivateKey,
 };
@@ -31,8 +27,7 @@ pub struct BlockHeightAndHash {
 /// Block data from BitcoinCore (`rust-bitcoin`)
 pub type BlockCore = Block<BlockHash, bitcoin::blockdata::block::Block>;
 
-pub use bitcoin_hashes::hash160::Hash as Hash160;
-pub use bitcoin_hashes::sha256d::Hash as Sha256dHash;
+pub use bitcoin_hashes::{hash160::Hash as Hash160, sha256d::Hash as Sha256dHash};
 pub type BlockHex = String;
 pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
 pub type TxHash = Sha256dHash;

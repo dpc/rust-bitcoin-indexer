@@ -7,8 +7,8 @@ pub mod util;
 use prelude::*;
 
 pub mod types;
-pub use types::*;
 pub use crate::{Block, BlockCore, BlockHeight};
+pub use types::*;
 
 use std::fmt::{Debug, Display};
 
@@ -48,10 +48,13 @@ impl RpcInfo {
             (None, None) => bitcoincore_rpc::Auth::None,
             _ => bail!("Incorrect node auth parameters"),
         };
-        Ok(Self {url, auth })
+        Ok(Self { url, auth })
     }
     pub fn to_rpc_client(&self) -> Result<bitcoincore_rpc::Client> {
-        Ok(bitcoincore_rpc::Client::new(self.url.clone(), self.auth.clone())?)
+        Ok(bitcoincore_rpc::Client::new(
+            self.url.clone(),
+            self.auth.clone(),
+        )?)
     }
 }
 #[cfg(test)]

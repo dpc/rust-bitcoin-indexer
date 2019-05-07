@@ -1,8 +1,7 @@
 use log::{debug, info, trace};
 
-use crate::{Sha256dHash,  BlockHeight, Block};
-use crate::prelude::*;
-use crate::{Rpc, RpcBlock, RpcBlockWithPrevId};
+use crate::{prelude::*, Block, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash};
+use bitcoincore_rpc::RpcApi;
 use common_failures::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -13,7 +12,6 @@ use std::{
     },
     time::Duration,
 };
-use bitcoincore_rpc::RpcApi;
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
     let delay_ms = 100;
@@ -317,7 +315,8 @@ where
                     "Waiting for the block from the workers at: {}H",
                     self.cur_height
                 );
-                let item = self.rx
+                let item = self
+                    .rx
                     .as_ref()
                     .expect("rx available")
                     .recv()

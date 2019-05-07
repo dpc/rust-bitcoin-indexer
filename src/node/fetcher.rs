@@ -1,8 +1,8 @@
 use super::prefetcher;
-use crate::{ Rpc};
+use crate::Rpc;
 use std::sync::Arc;
 
-use crate::{BlockHeight, Block};
+use crate::{Block, BlockHeight};
 use common_failures::prelude::*;
 
 /// Block fetcher
