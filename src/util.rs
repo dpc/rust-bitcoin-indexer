@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 pub struct BottleCheck {
     accumulated: std::time::Duration,
+    last: std::time::Instant,
     name: String,
 }
 
@@ -13,14 +14,22 @@ impl BottleCheck {
         Self {
             name,
             accumulated: Duration::default(),
+            last: Instant::now(),
         }
     }
     pub fn check<T>(&mut self, f: impl FnOnce() -> T) -> T {
         let start = Instant::now();
         let res = f();
-        self.accumulated += start.elapsed();
+        let end = Instant::now();
+        let since_last = start.duration_since(self.last);
+        let tolerance = since_last / 1000;
+        let duration =end.duration_since(start);
+        if duration > tolerance {
+            self.accumulated += duration;
+        }
+        self.last = end;
         if self.accumulated > Duration::from_secs(30) {
-            info!("Bottleneck at {}", self.name);
+            info!("Bottleneck: {}", self.name);
             self.accumulated = Duration::default();
         }
         res
