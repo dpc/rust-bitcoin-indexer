@@ -333,7 +333,8 @@ type BlocksInFlight = HashSet<BlockHash>;
 ///
 /// Reponsible for actually inserting data into the db.
 struct InsertThread {
-    tx: Option<crossbeam_channel::Sender<(u64, Vec<Parsed>)>>,
+    tx: Option<crossbeam_channel::Sender<(u64, Vec<crate::BlockCore>)>>,
+    parsing_thread: Option<std::thread::JoinHandle<Result<()>>>,
     processing_thread: Option<std::thread::JoinHandle<Result<()>>>,
     writer_thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
@@ -401,9 +402,10 @@ impl InsertThread {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
-        // improve performance, and  more things in flight means
+        // improve performance, and more things in flight means
         // incrased memory usage.
-        let (tx, rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
+        let (tx, rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
+        let (processing_tx, processing_rx) = crossbeam_channel::bounded::<(u64, Vec<Parsed>)>(0);
         let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
             u64,
             Vec<Vec<String>>,
@@ -414,13 +416,30 @@ impl InsertThread {
 
         let utxo_set_cache = Arc::new(Mutex::new(UtxoSetCache::default()));
 
+        let parsing_thread = std::thread::spawn({
+            fn_log_err("block_processing", move || {
+                while let Ok((batch_id, batch)) = rx.recv() {
+                    let parsed: Result<Vec<_>> = batch
+                        .par_iter()
+                        .map(|block_info| super::parse_node_block(&block_info))
+                        .collect();
+                    let parsed = parsed?;
+
+                    processing_tx
+                        .send((batch_id, parsed))
+                        .expect("Send not fail");
+                }
+                Ok(())
+            })
+        });
+
         let processing_thread = std::thread::spawn({
             let conn = establish_connection()?;
             fn_log_err("pg_processing", move || {
                 let mut next_block_id = read_next_block_id(&conn)?;
                 let mut next_tx_id = read_next_tx_id(&conn)?;
                 let mut next_output_id = read_next_output_id(&conn)?;
-                while let Ok((batch_id, parsed)) = rx.recv() {
+                while let Ok((batch_id, parsed)) = processing_rx.recv() {
                     let mut blocks: Vec<super::Block> = vec![];
                     let mut txs: Vec<super::Tx> = vec![];
                     let mut outputs: Vec<super::Output> = vec![];
@@ -571,6 +590,7 @@ impl InsertThread {
 
         Ok(InsertThread {
             tx: Some(tx),
+            parsing_thread: Some(parsing_thread),
             processing_thread: Some(processing_thread),
             writer_thread: Some(writer_thread),
         })
@@ -582,6 +602,7 @@ impl Drop for InsertThread {
         drop(self.tx.take());
 
         let joins = vec![
+            self.parsing_thread.take().unwrap(),
             self.processing_thread.take().unwrap(),
             self.writer_thread.take().unwrap(),
         ];
@@ -713,15 +734,11 @@ impl Postresql {
             self.batch_id,
             self.batch_txs_total
         );
-        let parsed: Result<Vec<_>> = std::mem::replace(&mut self.batch, vec![])
-            .par_iter()
-            .map(|block_info| super::parse_node_block(&block_info))
-            .collect();
-        let parsed = parsed?;
+        let batch = std::mem::replace(&mut self.batch, vec![]);
 
         let mut in_flight = self.in_flight.lock().expect("locking works");
-        for parsed in &parsed {
-            in_flight.insert(parsed.block.hash);
+        for block in &batch {
+            in_flight.insert(block.id);
         }
         drop(in_flight);
 
@@ -731,7 +748,7 @@ impl Postresql {
             .tx
             .as_ref()
             .expect("tx not null")
-            .send((self.batch_id, parsed))
+            .send((self.batch_id, batch))
             .expect("Send should not fail");
         trace!("Batch flushed");
         self.batch_txs_total = 0;

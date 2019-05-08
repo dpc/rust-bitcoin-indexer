@@ -23,7 +23,7 @@ impl BottleCheck {
         let end = Instant::now();
         let since_last = start.duration_since(self.last);
         let tolerance = since_last / 1000;
-        let duration =end.duration_since(start);
+        let duration = end.duration_since(start);
         if duration > tolerance {
             self.accumulated += duration;
         }
