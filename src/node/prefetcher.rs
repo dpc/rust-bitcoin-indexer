@@ -6,7 +6,6 @@ use common_failures::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
-        self,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
@@ -35,7 +34,8 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
 impl Rpc for bitcoincore_rpc::Client {
     type Data = bitcoin::Block;
     type Id = Sha256dHash;
-    const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 1000;
+    const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 2000;
+    const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 100;
 
     fn get_block_count(&self) -> Result<u64> {
         Ok(RpcApi::get_block_count(self)?)
@@ -155,9 +155,8 @@ where
     fn start_workers(&mut self) {
         self.workers_finish.store(false, Ordering::SeqCst);
 
-        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 8);
+        let (tx, rx) = crossbeam_channel::bounded(self.thread_num * 64);
         self.rx = Some(rx);
-        let retry_set = Arc::new(sync::Mutex::new(default()));
         let next_height = Arc::new(AtomicUsize::new(self.cur_height as usize));
         assert!(self.thread_joins.is_empty());
         for _ in 0..self.thread_num {
@@ -167,16 +166,15 @@ where
                     let rpc = self.rpc.clone();
                     let tx = tx.clone();
                     let workers_finish = self.workers_finish.clone();
-                    let retry_set = retry_set.clone();
+                    let in_progress = Arc::new(Mutex::new(default()));
                     move || {
                         // TODO: constructor
                         let mut worker = Worker {
-                            retry_set,
                             next_height,
                             workers_finish,
                             rpc,
                             tx,
-                            retry_count: 0,
+                            in_progress,
                         };
 
                         worker.run()
@@ -357,10 +355,9 @@ where
 {
     rpc: Arc<R>,
     next_height: Arc<AtomicUsize>,
-    retry_set: Arc<Mutex<BTreeSet<BlockHeight>>>,
     workers_finish: Arc<AtomicBool>,
     tx: crossbeam_channel::Sender<RpcBlockWithPrevId<R>>,
-    retry_count: usize,
+    in_progress: Arc<Mutex<BTreeSet<BlockHeight>>>,
 }
 
 impl<R> Worker<R>
@@ -368,53 +365,64 @@ where
     R: Rpc,
 {
     fn run(&mut self) {
-        while !self.workers_finish.load(Ordering::SeqCst) {
-            let height = self
-                .get_from_retry_set()
-                .unwrap_or_else(|| self.get_from_next_height());
+        loop {
+            let height = self.get_height_to_fetch();
 
-            match self.get_block_by_height(height) {
-                Err(e) => {
-                    self.insert_into_retry_set(height);
-                    trace!("Error from the node: {}", e);
-                    std::thread::sleep(Duration::from_millis(self.retry_count as u64 * 1000 + 100));
-                    self.retry_count += 1;
-                    if self.retry_count % 10 == 0 {
-                        debug!("Worker retrying rpc error {} at {}H", e, height,);
+            let mut retry_count = 0;
+            'retry: loop {
+                if self.workers_finish.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                match self.get_block_by_height(height) {
+                    Err(e) => {
+                        trace!("Error from the node: {}", e);
+                        let ahead_minimum = height
+                            - self
+                                .get_min_height_in_progress()
+                                .expect("at least current height");
+                        std::thread::sleep(Duration::from_millis(
+                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * ahead_minimum,
+                        ));
+                        retry_count += 1;
+                        if retry_count % 10 == 0 {
+                            debug!("Worker retrying rpc error {} at {}H", e, height);
+                        }
                     }
-                }
-                Ok(None) => {
-                    self.insert_into_retry_set(height);
-                    let sleep_ms = R::RECOMMENDED_HEAD_RETRY_DELAY_MS;
-                    std::thread::sleep(Duration::from_millis(sleep_ms));
-                }
-                Ok(Some(item)) => {
-                    self.retry_count = 0;
-                    self.tx.send(item).expect("Send must not fail");
+                    Ok(None) => {
+                        let sleep_ms = R::RECOMMENDED_HEAD_RETRY_DELAY_MS;
+                        std::thread::sleep(Duration::from_millis(sleep_ms));
+                    }
+                    Ok(Some(item)) => {
+                        self.tx.send(item).expect("Send must not fail");
+                        self.mark_height_fetched(height);
+                        break 'retry;
+                    }
                 }
             }
         }
     }
 
-    fn get_from_retry_set(&self) -> Option<BlockHeight> {
-        let mut set = self.retry_set.lock().unwrap();
-        if let Some(height) = set.iter().next().cloned() {
-            set.remove(&height);
-            return Some(height);
-        }
-
-        None
+    fn get_height_to_fetch(&self) -> BlockHeight {
+        let height = self.next_height.fetch_add(1, Ordering::SeqCst) as u64;
+        self.in_progress
+            .lock()
+            .expect("unlock works")
+            .insert(height);
+        height
     }
 
-    fn insert_into_retry_set(&self, height: BlockHeight) {
-        let mut set = self.retry_set.lock().unwrap();
-        let not_present = set.insert(height);
-        drop(set);
-        assert!(not_present);
+    fn get_min_height_in_progress(&self) -> Option<BlockHeight> {
+        let in_progress = self.in_progress.lock().expect("unlock works");
+        in_progress.iter().next().cloned()
     }
 
-    fn get_from_next_height(&self) -> BlockHeight {
-        self.next_height.fetch_add(1, Ordering::SeqCst) as u64
+    fn mark_height_fetched(&self, height: BlockHeight) {
+        assert!(self
+            .in_progress
+            .lock()
+            .expect("unlock works")
+            .remove(&height));
     }
 
     fn get_block_by_height(

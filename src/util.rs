@@ -21,17 +21,19 @@ impl BottleCheck {
         let start = Instant::now();
         let res = f();
         let end = Instant::now();
+
+        let duration = end.duration_since(start);
         let since_last = start.duration_since(self.last);
         let tolerance = since_last / 1000;
-        let duration = end.duration_since(start);
+
         if duration > tolerance {
             self.accumulated += duration;
         }
-        self.last = end;
         if self.accumulated > Duration::from_secs(30) {
             info!("Bottleneck: {}", self.name);
             self.accumulated = Duration::default();
         }
+        self.last = end;
         res
     }
 

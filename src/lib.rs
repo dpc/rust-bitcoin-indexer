@@ -26,6 +26,7 @@ pub trait Rpc: Send + Sync {
     type Data: Send;
     type Id: Send + Eq + PartialEq + Display + Debug + Clone;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64;
+    const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64;
 
     fn get_block_count(&self) -> Result<u64>;
 

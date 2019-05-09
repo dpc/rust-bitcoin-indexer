@@ -162,6 +162,7 @@ impl Rpc for TestRpc {
     type Data = usize;
     type Id = usize;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 0;
+    const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 0;
 
     fn get_block_count(&self) -> Result<u64> {
         self.maybe_change_state();
