@@ -1,5 +1,16 @@
+-- signgle record table to keep persistent indexer state
 CREATE TABLE IF NOT EXISTS indexer_state (
   bulk_mode BOOLEAN NOT NULL
+);
+
+-- events: you can follow them one by one,
+-- to follow blockchain state
+-- canceling protocol is used
+-- https://github.com/dpc/rust-bitcoin-indexer/wiki/How-to-interact-with-a-blockchain#canceling-protocol
+CREATE TABLE IF NOT EXISTS event (
+  id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
+  block_id BIGINT NOT NULL,
+  revert BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS block (
@@ -17,7 +28,7 @@ CREATE TABLE IF NOT EXISTS block (
 -- so it doesn't matter that much
 CREATE INDEX IF NOT EXISTS block_hash ON block (hash);
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
-CREATE UNIQUE INDEX IF NOT EXISTS block_hash_not_extinct ON block (hash) WHERE extinct = false;
+CREATE UNIQUE INDEX IF NOT EXISTS block_hash ON block (hash);
 
 CREATE TABLE IF NOT EXISTS tx (
   id BIGSERIAL NOT NULL, -- defined as PKEY later

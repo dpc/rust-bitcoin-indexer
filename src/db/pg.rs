@@ -26,6 +26,34 @@ fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
     BlockHash::from_slice(human_bytes.as_slice()).expect("correct hash")
 }
 
+fn create_bulk_insert_events_query(blocks: &[db::Block], next_block_id: i64) -> Vec<String> {
+
+    if blocks.is_empty() {
+        return vec![];
+    }
+    if blocks.len() > 9000 {
+        let mid = blocks.len() / 2;
+        let mut p1 = create_bulk_insert_events_query(&blocks[0..mid], next_block_id);
+        let mut p2 = create_bulk_insert_events_query(&blocks[mid..blocks.len()], next_block_id + mid as i64);
+        p1.append(&mut p2);
+        return p1;
+    }
+    let mut q: String =
+        "INSERT INTO event (block_id) VALUES".into();
+    for (i, _) in blocks.iter().enumerate() {
+        if i > 0 {
+            q.push_str(",")
+        }
+        q.write_fmt(format_args!(
+            "({})",
+            next_block_id + i as i64
+        ))
+        .unwrap();
+    }
+    q.write_str(";").expect("Write to string can't fail");
+    return vec![q];
+}
+
 fn create_bulk_insert_blocks_query(blocks: &[db::Block]) -> Vec<String> {
     if blocks.is_empty() {
         return vec![];
@@ -323,6 +351,7 @@ fn read_next_output_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "output", "id")
 }
 
+
 fn read_next_block_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "block", "id")
 }
@@ -462,17 +491,13 @@ impl InsertThread {
                         .map(|b| b.height)
                         .expect("at least one block");
 
-                    let min_block_height = blocks
-                        .iter()
-                        .next()
-                        .map(|b| b.height)
-                        .expect("at least one block");
-
                     let block_ids: HashMap<_, _> = blocks
                         .iter()
                         .enumerate()
                         .map(|(i, tx)| (tx.hash, next_block_id + i as i64))
                         .collect();
+
+                    let min_block_id = next_block_id;
 
                     next_block_id += blocks.len() as i64;
 
@@ -515,10 +540,7 @@ impl InsertThread {
                         output_ids.insert(k, v);
                     }
 
-                    pending_queries.push(vec![format!(
-                        "UPDATE block SET extinct = true WHERE height >= {};",
-                        min_block_height
-                    )]);
+                    pending_queries.push(create_bulk_insert_events_query(&blocks, min_block_id));
                     pending_queries.push(create_bulk_insert_blocks_query(&blocks));
                     pending_queries.push(create_bulk_insert_txs_query(
                         &txs,
@@ -713,7 +735,16 @@ impl Postresql {
         self.pipeline = Some(InsertThread::new(self.in_flight.clone()).unwrap())
     }
 
-    fn flush_workers(&mut self) {
+    fn flush_workers(&mut self) -> Result<()> {
+        self.flush_batch()?;
+        if !self.in_flight.lock().unwrap().is_empty() {
+            self.flush_workers_unconditionally();
+        }
+
+        Ok(())
+    }
+
+    fn flush_workers_unconditionally(&mut self) {
         self.stop_workers();
         self.start_workers();
     }
@@ -725,6 +756,7 @@ impl Postresql {
         );
     }
 
+    // Flush all batch of work to the workers
     fn flush_batch(&mut self) -> Result<()> {
         if self.batch.is_empty() {
             return Ok(());
@@ -782,8 +814,7 @@ impl Postresql {
         self.mode = mode;
 
         info!("Entering {}", mode.to_entering_str());
-        self.flush_batch()?;
-        self.flush_workers();
+        self.flush_workers()?;
 
         self.set_schema_to_mode(mode)?;
         // commit to the new mode in the db last
@@ -833,11 +864,7 @@ impl DataStore for Postresql {
 
         // TODO: This could be done better, if we were just tracking
         // things in flight better
-        self.flush_batch()?;
-        if !self.in_flight.lock().unwrap().is_empty() {
-            eprintln!("TODO: Unnecessary flush");
-            self.flush_workers();
-        }
+        self.flush_workers()?;
 
         Ok(self
             .connection
@@ -853,13 +880,30 @@ impl DataStore for Postresql {
     fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
         if let Some(db_hash) = self.get_hash_by_height(block.height)? {
             if db_hash != block.id {
-                // we move forward and there is a query in a inseting
-                // pipeline (`reorg_queries`)
-                // that will mark anything above and eq this hight as extinct
                 info!(
                     "Node block != db block at {}H; {} != {} - reorg",
                     block.height, block.id, db_hash
                 );
+
+
+                // workers expect state of tables not to change while they are running
+                // they need to be stopped
+                self.flush_batch()?;
+                self.stop_workers();
+
+                let transaction = self.connection.transaction()?;
+                transaction.execute(
+                    "INSERT INTO event (block_id, revert) SELECT id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
+                    &[&(block.height as i64)],
+                )?;
+                transaction.execute(
+                    "UPDATE block SET extinct = true WHERE height >= $1;",
+                    &[&(block.height as i64)],
+                )?;
+                transaction.commit()?;
+                self.last_inserted_block_height = Some(block.height - 1);
+
+                self.start_workers();
             } else {
                 // we already have exact same block, non-extinct, and we don't want
                 // to add it twice
