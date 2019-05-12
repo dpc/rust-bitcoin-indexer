@@ -20,6 +20,17 @@ pub fn establish_connection() -> Result<Connection> {
     Ok(Connection::connect(database_url, TlsMode::None)?)
 }
 
+fn get_hash_vec(mut val: Vec<u8>) -> BlockHash {
+    val.reverse();
+    BlockHash::from_slice(val.as_slice()).expect("correct hash")
+}
+
+fn hash_to_db_vec(hash: &BlockHash) -> Vec<u8> {
+    let mut v = std::borrow::Borrow::<[u8]>::borrow(hash).to_owned();
+    v.reverse();
+    v
+}
+
 fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
     let mut human_bytes = row.get::<_, Vec<u8>>(index);
     human_bytes.reverse();
@@ -27,28 +38,24 @@ fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
 }
 
 fn create_bulk_insert_events_query(blocks: &[db::Block], next_block_id: i64) -> Vec<String> {
-
     if blocks.is_empty() {
         return vec![];
     }
     if blocks.len() > 9000 {
         let mid = blocks.len() / 2;
         let mut p1 = create_bulk_insert_events_query(&blocks[0..mid], next_block_id);
-        let mut p2 = create_bulk_insert_events_query(&blocks[mid..blocks.len()], next_block_id + mid as i64);
+        let mut p2 =
+            create_bulk_insert_events_query(&blocks[mid..blocks.len()], next_block_id + mid as i64);
         p1.append(&mut p2);
         return p1;
     }
-    let mut q: String =
-        "INSERT INTO event (block_id) VALUES".into();
+    let mut q: String = "INSERT INTO event (block_id) VALUES".into();
     for (i, _) in blocks.iter().enumerate() {
         if i > 0 {
             q.push_str(",")
         }
-        q.write_fmt(format_args!(
-            "({})",
-            next_block_id + i as i64
-        ))
-        .unwrap();
+        q.write_fmt(format_args!("({})", next_block_id + i as i64))
+            .unwrap();
     }
     q.write_str(";").expect("Write to string can't fail");
     return vec![q];
@@ -351,7 +358,6 @@ fn read_next_output_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "output", "id")
 }
 
-
 fn read_next_block_id(conn: &Connection) -> Result<i64> {
     read_next_id(conn, "block", "id")
 }
@@ -639,7 +645,6 @@ impl Drop for InsertThread {
 
 pub struct Postresql {
     connection: Connection,
-    cached_max_height: Option<u64>,
     pipeline: Option<InsertThread>,
     batch: Vec<crate::BlockCore>,
     batch_txs_total: u64,
@@ -647,11 +652,16 @@ pub struct Postresql {
     mode: Mode,
     node_chain_head_height: BlockHeight,
 
+    // blocks that were sent to workers, but
+    // were not yet written
     in_flight: Arc<Mutex<BlocksInFlight>>,
 
-    // for double checking logic here
-    last_inserted_block_height: Option<BlockHeight>,
-    num_inserted: u64,
+    // block count of the currently longest chain
+    chain_block_count: BlockHeight,
+    // to guarantee that the db never contains an inconsistent state
+    // during the reorg, all reorg blocks are being gathered here
+    // until they overtake the current `chain_block_count`
+    pending_reorg: BTreeMap<BlockHeight, BlockCore>,
 }
 
 impl Drop for Postresql {
@@ -665,18 +675,24 @@ impl Postresql {
         let connection = establish_connection()?;
         Self::init(&connection)?;
         let mode = Self::read_indexer_state(&connection)?;
+        let chain_block_count = Self::read_db_chain_block_count(&connection)?;
+        let chain_current_block_count = Self::read_db_chain_current_block_count(&connection)?;
+
+        assert_eq!(
+            chain_block_count, chain_current_block_count,
+            "db is supposed to preserve reorg atomicity"
+        );
         let mut s = Postresql {
             connection,
             pipeline: None,
-            cached_max_height: None,
             batch: vec![],
             batch_txs_total: 0,
             batch_id: 0,
             mode,
             node_chain_head_height,
+            pending_reorg: BTreeMap::default(),
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
-            last_inserted_block_height: None,
-            num_inserted: 0,
+            chain_block_count,
         };
         if s.mode == Mode::FreshBulk {
             s.self_test()?;
@@ -686,6 +702,61 @@ impl Postresql {
         Ok(s)
     }
 
+    fn read_db_block_id_extinct_by_hash_trans(
+        conn: &postgres::transaction::Transaction,
+        hash: &BlockHash,
+    ) -> Result<Option<(u64, bool)>> {
+        Ok(conn
+            .query(
+                "SELECT id, extinct FROM block WHERE hash = $1",
+                &[&hash_to_db_vec(hash)],
+            )?
+            .iter()
+            .next()
+            .map(|row| (row.get::<_, i64>(0) as u64, row.get::<_, bool>(1))))
+    }
+
+    fn read_db_chain_current_block_count(conn: &Connection) -> Result<BlockHeight> {
+        Ok(query_one_value_opt::<i64>(
+            conn,
+            "SELECT max(height) FROM block WHERE extinct = FALSE",
+            &[],
+        )?
+        .map(|i| i as u64 + 1)
+        .unwrap_or(0))
+    }
+
+    fn read_db_chain_block_count(conn: &Connection) -> Result<BlockHeight> {
+        Ok(
+            query_one_value_opt::<i64>(conn, "SELECT max(height) FROM block", &[])?
+                .map(|i| i as u64 + 1)
+                .unwrap_or(0),
+        )
+    }
+
+    fn read_db_block_hash_by_height(
+        conn: &Connection,
+        height: BlockHeight,
+    ) -> Result<Option<BlockHash>> {
+        Ok(query_one_value::<Vec<u8>>(
+            &conn,
+            "SELECT hash FROM block WHERE height = $1 AND extinct = false",
+            &[&(height as i64)],
+        )?
+        .map(get_hash_vec))
+    }
+
+    fn read_db_block_hash_by_height_trans(
+        conn: &postgres::transaction::Transaction,
+        height: BlockHeight,
+    ) -> Result<Option<BlockHash>> {
+        Ok(query_one_value_trans::<Vec<u8>>(
+            &conn,
+            "SELECT hash FROM block WHERE height = $1 AND extinct = false",
+            &[&(height as i64)],
+        )?
+        .map(get_hash_vec))
+    }
     fn read_indexer_state(conn: &Connection) -> Result<Mode> {
         let state = conn.query("SELECT bulk_mode FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
@@ -729,6 +800,10 @@ impl Postresql {
         assert!(self.in_flight.lock().unwrap().is_empty());
     }
 
+    fn are_workers_stopped(&self) -> bool {
+        self.pipeline.is_none()
+    }
+
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
@@ -736,9 +811,11 @@ impl Postresql {
     }
 
     fn flush_workers(&mut self) -> Result<()> {
-        self.flush_batch()?;
-        if !self.in_flight.lock().unwrap().is_empty() {
-            self.flush_workers_unconditionally();
+        if !self.are_workers_stopped() {
+            self.flush_batch()?;
+            if !self.in_flight.lock().unwrap().is_empty() {
+                self.flush_workers_unconditionally();
+            }
         }
 
         Ok(())
@@ -747,13 +824,6 @@ impl Postresql {
     fn flush_workers_unconditionally(&mut self) {
         self.stop_workers();
         self.start_workers();
-    }
-
-    fn update_max_height(&mut self, block: &crate::BlockCore) {
-        self.cached_max_height = Some(
-            self.cached_max_height
-                .map_or(block.height, |h| std::cmp::max(h, block.height)),
-        );
     }
 
     // Flush all batch of work to the workers
@@ -836,113 +906,269 @@ impl Postresql {
         self.set_mode_uncodintionally(Mode::FreshBulk)?;
         Ok(())
     }
+
+    fn is_in_reorg(&self) -> bool {
+        !self.pending_reorg.is_empty()
+    }
+
+    fn insert_when_at_tip(&mut self, block: crate::BlockCore) -> Result<()> {
+        debug_assert!(!self.is_in_reorg());
+        debug_assert!(!self.are_workers_stopped());
+        debug_assert!(self.pending_reorg.is_empty());
+
+        trace!(
+            "Inserting at tip block {}H {} when chain_block_count = {}",
+            block.height,
+            block.id,
+            self.chain_block_count
+        );
+
+        // if we extend, we can't make holes
+        assert!(block.height <= self.chain_block_count);
+
+        // we're not extending ... reorg start or something we already have
+        if block.height != self.chain_block_count {
+            // workers expect state of tables not to change while they are running
+            // they need to be stopped
+            self.flush_batch()?;
+            self.stop_workers();
+
+            let db_hash = Self::read_db_block_hash_by_height(&self.connection, block.height)?
+                .expect("Block at this height should already by indexed");
+
+            if db_hash == block.id {
+                // we already have exact same block, non-extinct, and we don't want
+                // to add it twice
+                trace!("Alredy included block {}H {}", block.height, block.id);
+                self.start_workers();
+
+                return Ok(());
+            }
+
+            // we're starting a reorg
+
+            info!(
+                "Node block != db block at {}H; {} != {} - reorg",
+                block.height, block.id, db_hash
+            );
+
+            assert!(self.batch.is_empty());
+            self.pending_reorg.insert(block.height, block);
+            assert!(self.is_in_reorg());
+
+            // Note: we keep workers stopped; they will be restarted
+            // when we're done with the reorg
+            return Ok(());
+        }
+
+        self.batch_txs_total += block.data.txdata.len() as u64;
+        let height = block.height;
+        self.batch.push(block);
+        self.chain_block_count += 1;
+
+        if self.mode.is_bulk() {
+            if self.batch_txs_total > 100_000 {
+                self.flush_batch()?;
+            }
+        } else {
+            self.flush_batch()?;
+        }
+
+        if self.node_chain_head_height == height {
+            self.set_mode(Mode::Normal)?;
+        }
+
+        Ok(())
+    }
+
+    fn insert_when_in_reorg(&mut self, block: crate::BlockCore) -> Result<()> {
+        debug_assert!(self.is_in_reorg());
+        debug_assert!(self.are_workers_stopped());
+        debug_assert!(!self.pending_reorg.is_empty());
+
+        trace!(
+            "Inserting in reorg block {}H {} when chain_block_count = {}",
+            block.height,
+            block.id,
+            self.chain_block_count
+        );
+
+        // if we extend, we can't make holes
+        assert!(block.height <= self.chain_block_count);
+
+        let _ = self.pending_reorg.split_off(&block.height);
+
+        trace!("Reorg block {}H {}", block.height, block.id);
+        let height = block.height;
+        self.pending_reorg.insert(height, block);
+
+        if height == self.chain_block_count {
+            trace!("Flushing reorg at {}H", height);
+            self.finish_reorg()?;
+        }
+
+        Ok(())
+    }
+
+    fn finish_reorg(&mut self) -> Result<()> {
+        debug_assert!(self.is_in_reorg());
+        debug_assert!(self.are_workers_stopped());
+        debug_assert!(!self.pending_reorg.is_empty());
+
+        let transaction = self.connection.transaction()?;
+
+        let mut first_different_height = None;
+        for (height, block) in self.pending_reorg.iter() {
+            if let Some(existing_hash) =
+                Self::read_db_block_hash_by_height_trans(&transaction, *height)?
+            {
+                if existing_hash != block.id {
+                    first_different_height = Some(block.height);
+                    break;
+                }
+            }
+        }
+
+        let first_different_height = first_different_height.unwrap_or(self.chain_block_count);
+
+        trace!("Reorg begining at {}H", first_different_height);
+
+        transaction.execute(
+            "INSERT INTO event (block_id, revert) SELECT id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
+            &[&(first_different_height as i64)],
+        )?;
+        transaction.execute(
+            "UPDATE block SET extinct = true WHERE height >= $1;",
+            &[&(first_different_height as i64)],
+        )?;
+
+        self.pending_reorg = self.pending_reorg.split_off(&first_different_height);
+
+        let mut prev_height: Option<BlockHeight> = None;
+        for (height, block) in
+            std::mem::replace(&mut self.pending_reorg, BTreeMap::new()).into_iter()
+        {
+            if let Some(prev_height) = prev_height {
+                assert_eq!(prev_height + 1, height);
+            }
+            prev_height = Some(block.height);
+
+            match Self::read_db_block_id_extinct_by_hash_trans(&transaction, &block.id)? {
+                Some((existing_block_id, false)) => {
+                    panic!("Why is block id={} not extinct?", existing_block_id)
+                }
+                Some((existing_block_id, true)) => {
+                    trace!(
+                        "Existing reorg block: reviving {}H {}",
+                        block.height,
+                        block.id
+                    );
+                    transaction.execute(
+                        "UPDATE block SET extinct = false WHERE id = $1;",
+                        &[&(existing_block_id as i64)],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO event (block_id) VALUES ($1);",
+                        &[&(existing_block_id as i64)],
+                    )?;
+                }
+                None => {
+                    trace!("Unindexed reorg block {}H {}", block.height, block.id);
+                    self.batch_txs_total += block.data.txdata.len() as u64;
+                    self.batch.push(block);
+                }
+            }
+        }
+        // only the last block is actually increasing the block count
+        self.chain_block_count += 1;
+
+        assert!(!self.batch.is_empty());
+
+        transaction.commit()?;
+
+        self.start_workers();
+        self.flush_batch()?;
+
+        Ok(())
+    }
 }
 
+fn query_one_value<T>(
+    conn: &Connection,
+    q: &str,
+    params: &[&dyn postgres::types::ToSql],
+) -> Result<Option<T>>
+where
+    T: postgres::types::FromSql,
+{
+    Ok(conn
+        .query(q, params)?
+        .iter()
+        .next()
+        .map(|row| row.get::<_, T>(0)))
+}
+
+fn query_one_value_opt<T>(
+    conn: &Connection,
+    q: &str,
+    params: &[&dyn postgres::types::ToSql],
+) -> Result<Option<T>>
+where
+    T: postgres::types::FromSql,
+{
+    Ok(conn
+        .query(q, params)?
+        .iter()
+        .next()
+        .and_then(|row| row.get::<_, Option<T>>(0)))
+}
+
+fn query_one_value_trans<T>(
+    conn: &postgres::transaction::Transaction,
+    q: &str,
+    params: &[&dyn postgres::types::ToSql],
+) -> Result<Option<T>>
+where
+    T: postgres::types::FromSql,
+{
+    Ok(conn
+        .query(q, params)?
+        .iter()
+        .next()
+        .map(|row| row.get::<_, T>(0)))
+}
 impl DataStore for Postresql {
     fn get_head_height(&mut self) -> Result<Option<BlockHeight>> {
-        if let Some(height) = self.cached_max_height {
-            return Ok(Some(height));
-        }
-        self.cached_max_height = self
-            .connection
-            .query("SELECT height FROM block ORDER BY id DESC LIMIT 1", &[])?
-            .iter()
-            .next()
-            .and_then(|row| row.get::<_, Option<i64>>(0))
-            .map(|u| u as u64);
-
-        Ok(self.cached_max_height)
+        Ok(if self.chain_block_count == 0 {
+            None
+        } else {
+            Some(self.chain_block_count - 1)
+        })
     }
 
     fn get_hash_by_height(&mut self, height: BlockHeight) -> Result<Option<BlockHash>> {
         trace!("PG: get_hash_by_height {}H", height);
-        if let Some(max_height) = self.cached_max_height {
-            if max_height < height {
-                return Ok(None);
-            }
+
+        if self.chain_block_count <= height {
+            return Ok(None);
+        }
+
+        if let Some(block) = self.pending_reorg.get(&height) {
+            return Ok(Some(block.id.clone()));
         }
 
         // TODO: This could be done better, if we were just tracking
         // things in flight better
         self.flush_workers()?;
 
-        Ok(self
-            .connection
-            .query(
-                "SELECT hash FROM block WHERE height = $1 AND extinct = false",
-                &[&(height as i64)],
-            )?
-            .iter()
-            .next()
-            .map(|row| get_hash(&row, 0)))
+        Self::read_db_block_hash_by_height(&self.connection, height)
     }
 
     fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
-        if let Some(db_hash) = self.get_hash_by_height(block.height)? {
-            if db_hash != block.id {
-                info!(
-                    "Node block != db block at {}H; {} != {} - reorg",
-                    block.height, block.id, db_hash
-                );
-
-
-                // workers expect state of tables not to change while they are running
-                // they need to be stopped
-                self.flush_batch()?;
-                self.stop_workers();
-
-                let transaction = self.connection.transaction()?;
-                transaction.execute(
-                    "INSERT INTO event (block_id, revert) SELECT id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
-                    &[&(block.height as i64)],
-                )?;
-                transaction.execute(
-                    "UPDATE block SET extinct = true WHERE height >= $1;",
-                    &[&(block.height as i64)],
-                )?;
-                transaction.commit()?;
-                self.last_inserted_block_height = Some(block.height - 1);
-
-                self.start_workers();
-            } else {
-                // we already have exact same block, non-extinct, and we don't want
-                // to add it twice
-                trace!(
-                    "Skip indexing alredy included block {}H {}",
-                    block.height,
-                    block.id
-                );
-                // if we're here, we must have not inserted anything yet,
-                // and these are prefetcher starting from some past blocks
-                assert_eq!(self.num_inserted, 0);
-                return Ok(());
-            }
+        if self.is_in_reorg() {
+            self.insert_when_in_reorg(block)?;
         } else {
-            // we can only be inserting non-reorg blocks one height at a time
-            if let Some(last_inserted_block_height) = self.last_inserted_block_height {
-                assert_eq!(block.height, last_inserted_block_height + 1);
-            }
-        }
-
-        self.num_inserted += 1;
-        self.last_inserted_block_height = Some(block.height);
-
-        self.update_max_height(&block);
-
-        self.batch_txs_total += block.data.txdata.len() as u64;
-        let height = block.height;
-        self.batch.push(block);
-
-        if self.mode.is_bulk() {
-            if self.batch_txs_total > 100_000 {
-                self.flush_batch()?;
-            }
-        } else if self.cached_max_height.expect("Already set") <= height {
-            self.flush_batch()?;
-        }
-
-        if self.node_chain_head_height == height {
-            self.set_mode(Mode::Normal)?;
+            self.insert_when_at_tip(block)?;
         }
 
         Ok(())

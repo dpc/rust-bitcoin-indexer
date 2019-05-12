@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS block (
 CREATE INDEX IF NOT EXISTS block_hash ON block (hash);
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
 CREATE UNIQUE INDEX IF NOT EXISTS block_hash ON block (hash);
+CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
 
 CREATE TABLE IF NOT EXISTS tx (
   id BIGSERIAL NOT NULL, -- defined as PKEY later
