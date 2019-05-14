@@ -9,18 +9,23 @@ chain-head, keep indexing in real-time and handle reorgs.
 This started as an education experiment, but is quite useful and advanced already.
 
 
-Original goals:
+Goals:
 
-* check how much code is realistically necessary
-* check how simple/complex can it be
-* check Rust ecosystem support (`rust-bitcoin` mostly)
-* check performance and see how much can it be optimized
-* check unkown unknows and own knowledge
+* simplicity and small code:
+    * easy to fork and customize
+* versatile data model:
+    * append-only log
+    * support for event sourcing
+    * support for efficient queries
+    * correct by construction
+    * always-coherent state view (i.e. atomic reorgs)
+* top-notch performance, especially during initial indexing
 
 Read [How to interact with a blockchain](https://dpc.pw/rust-bitcoin-indexer-how-to-interact-with-a-blockchain) for knowledge sharing, discoveries and design-decisions.
 
-Status: The codebase is very simple, design quite clean and composable and performance really good.
-Some tests are there and everything seems quite robust, but not used in production ever so far. 
+Status:
+* The codebase is very simple, design quite clean and composable and performance really good.
+* Some tests are there and everything seems quite robust, but not tested in production so far. 
 
 
 ## Running
