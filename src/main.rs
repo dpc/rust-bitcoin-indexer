@@ -9,6 +9,7 @@ use bitcoin_indexer::{
     util::BottleCheck,
     RpcInfo,
 };
+use std::env;
 use bitcoincore_rpc::RpcApi;
 use log::info;
 use std::sync::Arc;
@@ -23,11 +24,13 @@ struct Indexer {
 }
 
 impl Indexer {
-    fn new(rpc_info: RpcInfo) -> Result<Self> {
+    fn new(config: Config) -> Result<Self> {
+
+        let rpc_info = bitcoin_indexer::RpcInfo::from_url(&config.node_url)?;
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()?;
-        let mut db = db::pg::Postresql::new(node_starting_chainhead_height)?;
+        let mut db = db::pg::Postresql::new(config.db_url, node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {
@@ -82,19 +85,39 @@ impl Indexer {
     }
 }
 
+struct Config {
+    db_url: String,
+    node_url: String,
+}
+
+impl Config {
+    fn from_env() -> Result<Self> {
+        Ok  (Self {
+            db_url: env::var("DATABASE_URL")?,
+            node_url: env::var("NODE_RPC_URL")?,
+        })
+    }
+}
+
 fn run() -> Result<()> {
+    dotenv::dotenv()?;
+
     env_logger::init();
+    let config = Config::from_env()?;
+
     let opts: opts::Opts = structopt::StructOpt::from_args();
-    let rpc_info =
-        bitcoin_indexer::RpcInfo::new(opts.node_rpc_url, opts.node_rpc_user, opts.node_rpc_pass)?;
 
     if opts.wipe_db {
-        db::pg::Postresql::wipe()?;
-    } else if let Some(height) = opts.wipe_to_height {
-        let mut indexer = Indexer::new(rpc_info)?;
+        db::pg::Postresql::wipe(&env::var("DATABASE_URL")?)?;
+        return Ok(());
+    }
+
+
+    if let Some(height) = opts.wipe_to_height {
+        let mut indexer = Indexer::new(config)?;
         indexer.db.wipe_to_height(height)?;
     } else {
-        let mut indexer = Indexer::new(rpc_info)?;
+        let mut indexer = Indexer::new(config)?;
         indexer.run()?;
     }
 

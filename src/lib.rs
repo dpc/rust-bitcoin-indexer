@@ -43,13 +43,17 @@ pub struct RpcInfo {
 }
 
 impl RpcInfo {
-    pub fn new(url: String, user: Option<String>, pass: Option<String>) -> Result<Self> {
-        let auth = match (user, pass) {
-            (Some(u), Some(p)) => bitcoincore_rpc::Auth::UserPass(u.clone(), p.clone()),
-            (None, None) => bitcoincore_rpc::Auth::None,
+    pub fn from_url(url_str: &str) -> Result<Self> {
+        let mut url = url::Url::parse(url_str)?;
+        let auth = match (url.username() == "", url.password()) {
+            (false, Some(p)) => bitcoincore_rpc::Auth::UserPass(url.username().to_owned(), p.to_owned()),
+            (true, None) => bitcoincore_rpc::Auth::None,
             _ => bail!("Incorrect node auth parameters"),
         };
-        Ok(Self { url, auth })
+        url.set_password(None).expect("url lib sane");
+        url.set_username("").expect("url lib sane");
+
+        Ok(Self { url: url.to_string(), auth })
     }
     pub fn to_rpc_client(&self) -> Result<bitcoincore_rpc::Client> {
         Ok(bitcoincore_rpc::Client::new(

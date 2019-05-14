@@ -2,22 +2,25 @@ use log::{debug, error, info, trace};
 
 use super::*;
 use crate::{db, Block, BlockHash, BlockHeight, OutPoint};
-use dotenv::dotenv;
 use postgres::{Connection, TlsMode};
 use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
-    env,
     fmt::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-pub fn establish_connection() -> Result<Connection> {
-    dotenv()?;
-
-    let database_url = env::var("DATABASE_URL")?;
-    Ok(Connection::connect(database_url, TlsMode::None)?)
+pub fn establish_connection(url: &str) -> Result<Connection> {
+    loop {
+        match Connection::connect(url, TlsMode::None) {
+            Err(e) => {
+                eprintln!("Error connecting to PG: {}", e);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            Ok(o) => return Ok(o),
+        }
+    }
 }
 
 fn get_hash_vec(mut val: Vec<u8>) -> BlockHash {
@@ -433,7 +436,7 @@ impl fmt::Display for Mode {
 }
 
 impl InsertThread {
-    fn new(in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
+    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -469,7 +472,8 @@ impl InsertThread {
         });
 
         let processing_thread = std::thread::spawn({
-            let conn = establish_connection()?;
+              let url = url.clone();
+            let conn = establish_connection(&url)?;
             fn_log_err("pg_processing", move || {
                 let mut next_block_id = read_next_block_id(&conn)?;
                 let mut next_tx_id = read_next_tx_id(&conn)?;
@@ -575,7 +579,8 @@ impl InsertThread {
         });
 
         let writer_thread = std::thread::spawn({
-            let conn = establish_connection()?;
+              let url = url.clone();
+            let conn = establish_connection(&url)?;
             fn_log_err("pg_writer", move || {
                 let mut prev_time = std::time::Instant::now();
                 while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) =
@@ -644,6 +649,7 @@ impl Drop for InsertThread {
 }
 
 pub struct Postresql {
+    url: String,
     connection: Connection,
     pipeline: Option<InsertThread>,
     batch: Vec<crate::BlockCore>,
@@ -671,8 +677,8 @@ impl Drop for Postresql {
 }
 
 impl Postresql {
-    pub fn new(node_chain_head_height: BlockHeight) -> Result<Self> {
-        let connection = establish_connection()?;
+    pub fn new(url: String, node_chain_head_height: BlockHeight) -> Result<Self> {
+        let connection = establish_connection(&url)?;
         Self::init(&connection)?;
         let mode = Self::read_indexer_state(&connection)?;
         let chain_block_count = Self::read_db_chain_block_count(&connection)?;
@@ -683,6 +689,7 @@ impl Postresql {
             "db is supposed to preserve reorg atomicity"
         );
         let mut s = Postresql {
+            url,
             connection,
             pipeline: None,
             batch: vec![],
@@ -807,7 +814,7 @@ impl Postresql {
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(InsertThread::new(self.in_flight.clone()).unwrap())
+        self.pipeline = Some(InsertThread::new(self.url.clone(), self.in_flight.clone()).unwrap())
     }
 
     fn flush_workers(&mut self) -> Result<()> {
@@ -858,9 +865,9 @@ impl Postresql {
         Ok(())
     }
 
-    pub fn wipe() -> Result<()> {
+    pub fn wipe(url: &str) -> Result<()> {
         info!("Wiping db schema");
-        let connection = establish_connection()?;
+        let connection = establish_connection(&url)?;
         connection.batch_execute(include_str!("pg/wipe.sql"))?;
         Ok(())
     }

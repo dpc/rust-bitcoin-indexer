@@ -28,6 +28,7 @@ log = "0.4"
 rayon = "1"
 env_logger = { version = "*", default-features = false, features = ["termcolor", "atty", "humantime"]}
 itertools = "0.6"
+url = "1"
 
 [dev-dependencies]
 criterion = "0.2"

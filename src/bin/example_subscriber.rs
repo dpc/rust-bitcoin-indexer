@@ -3,7 +3,7 @@ use common_failures::{prelude::*, quick_main};
 
 fn run() -> Result<()> {
     env_logger::init();
-    let mut db = db::pg::establish_connection()?;
+    let mut db = db::pg::establish_connection("localhost")?;
 
     let mut cursor = None;
 
