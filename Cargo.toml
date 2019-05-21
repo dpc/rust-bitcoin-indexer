@@ -15,7 +15,7 @@ bitcoin_hashes = "0.3"
 bitcoincore-rpc = { version = "0.5", branch = "auth", git="https://github.com/dpc/rust-bitcoincore-rpc" }
 common_failures = "*"
 failure = "*"
-hex = "*"
+hex = "0.3"
 secp256k1 = "0.12.2"
 crossbeam-channel = "*"
 structopt = "*"
@@ -27,7 +27,7 @@ num_cpus = "1"
 log = "0.4"
 rayon = "1"
 env_logger = { version = "*", default-features = false, features = ["termcolor", "atty", "humantime"]}
-itertools = "0.6"
+itertools = "0.8"
 url = "1"
 
 [dev-dependencies]

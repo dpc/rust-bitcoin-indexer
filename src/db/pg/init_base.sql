@@ -9,15 +9,15 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 -- https://github.com/dpc/rust-bitcoin-indexer/wiki/How-to-interact-with-a-blockchain#canceling-protocol
 CREATE TABLE IF NOT EXISTS event (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
-  block_id BIGINT NOT NULL,
+  block_hash_id BYTEA NOT NULL,
   revert BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS block (
-  id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
+  hash_id BYTEA NOT NULL UNIQUE PRIMARY KEY,
+  hash_rest BYTEA NOT NULL,
   height BIGINT NOT NULL,
-  hash BYTEA NOT NULL,
-  prev_hash BYTEA NOT NULL,
+  prev_hash_id BYTEA NOT NULL,
   merkle_root BYTEA NOT NULL,
   time BIGINT NOT NULL,
   extinct BOOLEAN NOT NULL DEFAULT FALSE
@@ -26,36 +26,45 @@ CREATE TABLE IF NOT EXISTS block (
 -- We always want these two, as a lot of logic is based
 -- on `block` table, and it's the smallest table overall,
 -- so it doesn't matter that much
-CREATE INDEX IF NOT EXISTS block_hash ON block (hash);
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
-CREATE UNIQUE INDEX IF NOT EXISTS block_hash ON block (hash);
 CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
 
 CREATE TABLE IF NOT EXISTS tx (
-  id BIGSERIAL NOT NULL, -- defined as PKEY later
-  block_id BIGINT NOT NULL,
-  hash BYTEA NOT NULL,
+  hash_id BYTEA NOT NULL,
+  hash_rest BYTEA NOT NULL,
   weight BIGINT NOT NULL,
   fee BIGINT NOT NULL,
   coinbase BOOLEAN NOT NULL
 );
 
+
+-- mapping between blocks and txes they include
+CREATE TABLE IF NOT EXISTS block_tx (
+  block_hash_id BYTEA NOT NULL,
+  tx_hash_id BYTEA NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS output (
-  id BIGSERIAL NOT NULL, -- defined as PKEY later
-  tx_id BIGINT NOT NULL,
+  tx_hash_id BYTEA NOT NULL,
   tx_idx INT NOT NULL,
   value BIGINT NOT NULL,
   address TEXT,
   coinbase BOOLEAN NOT NULL
 );
 
--- Unfortunately `input` is not simply unique on `output_id`, because there can be
--- multiple inputs created for the same output, some of which were extinct
 CREATE TABLE IF NOT EXISTS input (
-  output_id BIGINT NOT NULL, -- output id this tx input spends
-  tx_id BIGINT NOT NULL -- tx id this input is from
+  output_tx_hash_id BIGINT NOT NULL, -- output id this tx input spends
+  output_tx_idx INT NOT NULL,
+  tx_hash_id BIGINT NOT NULL -- tx id this input is from
 );
 
+CREATE TABLE IF NOT EXISTS mempool (
+  output_tx_hash_id BIGINT NOT NULL, -- output id this tx input spends
+  output_tx_idx INT NOT NULL,
+  tx_hash_id BIGINT NOT NULL -- tx id this input is from
+);
+
+/* FIXME
 -- create some views
 CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
@@ -94,3 +103,4 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
     block.height,
     output.address
   ORDER BY output.address;
+*/

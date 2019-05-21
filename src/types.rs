@@ -25,7 +25,7 @@ pub struct BlockHeightAndHash {
 }
 
 /// Block data from BitcoinCore (`rust-bitcoin`)
-pub type BlockCore = Block<BlockHash, bitcoin::blockdata::block::Block>;
+pub type BlockCore = Block<BlockHash, Box<bitcoin::blockdata::block::Block>>;
 
 pub use bitcoin_hashes::{hash160::Hash as Hash160, sha256d::Hash as Sha256dHash};
 pub type BlockHex = String;
