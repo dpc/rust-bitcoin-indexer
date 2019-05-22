@@ -48,8 +48,7 @@ CREATE TABLE IF NOT EXISTS output (
   tx_hash_id BYTEA NOT NULL,
   tx_idx INT NOT NULL,
   value BIGINT NOT NULL,
-  address TEXT,
-  coinbase BOOLEAN NOT NULL
+  address TEXT
 );
 
 CREATE TABLE IF NOT EXISTS input (

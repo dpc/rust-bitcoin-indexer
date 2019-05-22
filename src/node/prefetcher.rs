@@ -32,7 +32,7 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
 }
 
 impl Rpc for bitcoincore_rpc::Client {
-    type Data = bitcoin::Block;
+    type Data = Box<bitcoin::Block>;
     type Id = Sha256dHash;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 2000;
     const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 100;
@@ -55,7 +55,7 @@ impl Rpc for bitcoincore_rpc::Client {
     }
 
     fn get_block_by_id(&self, hash: &Self::Id) -> Result<Option<(Self::Data, Self::Id)>> {
-        let block: bitcoin::Block = match self.get_by_id(hash) {
+        let block: Box<bitcoin::Block> = match self.get_by_id(hash) {
             Err(e) => {
                 if e.to_string().contains("Block height out of range") {
                     return Ok(None);
@@ -63,7 +63,7 @@ impl Rpc for bitcoincore_rpc::Client {
                     return Err(e.into());
                 }
             }
-            Ok(o) => o,
+            Ok(o) => Box::new(o),
         };
         let prev_id = block.header.prev_blockhash;
         Ok(Some((block, prev_id)))

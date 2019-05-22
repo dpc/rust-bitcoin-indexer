@@ -22,12 +22,14 @@ BEGIN
 END $$;
 DROP INDEX IF EXISTS block_tx_tx_hash_id_block_hash_id;
 
+-- in bulk mode, the cache starts empty, so we need to be
+-- able to fetch outputs by key
 DO $$
 BEGIN
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'output' AND constraint_type = 'PRIMARY KEY'
   ) THEN
-    ALTER TABLE output DROP CONSTRAINT output_pkey;
+    ALTER TABLE output ADD PRIMARY KEY (tx_hash_id, tx_idx);
   END IF;
 END $$;
 DROP INDEX IF EXISTS output_address_value;
