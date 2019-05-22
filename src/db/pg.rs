@@ -12,6 +12,7 @@ use std::{
 use bitcoin::blockdata;
 use hex::ToHex;
 use itertools::Itertools;
+use rayon::prelude::*;
 
 pub fn establish_connection(url: &str) -> Result<Connection> {
     loop {
@@ -834,7 +835,7 @@ impl InsertThread {
         // improve performance, and more things in flight means
         // incrased memory usage.
         let (utxo_fetching_tx, utxo_fetching_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
-        let (processing_tx, processing_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap)>(0);
+        let (query_fmt_tx, query_fmt_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap)>(0);
         let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
             u64,
             Vec<String>,
@@ -852,12 +853,24 @@ impl InsertThread {
 
                 while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
 
+                    // TODO: use this elsewhere
+                    let tx_ids : HashMap<(BlockHeight, usize), BlockHash> =
+                        blocks.par_iter().flat_map(
+                            move |block|
+                              block.data.txdata.par_iter()
+                                  .enumerate()
+                                  .map(move |(tx_i, tx)|
+                                     (block.height, tx_i, tx.txid())
+                                   )
+                                   ).map( |(h, tx_i, txid)| ((h, tx_i), txid))
+                                     .collect();
+
 
                     for block in &blocks {
-                        for tx in &block.data.txdata {
+                        for (tx_i, tx) in block.data.txdata.iter().enumerate() {
                             for (vout, output) in tx.output.iter().enumerate() {
-                                // TODO: we're calculating tx_id twice now :(
-                                utxo_set_cache.insert(HashIdOutPoint::new(&tx.txid(), vout as u32), output.value);
+                                let txid = &tx_ids[&(block.height, tx_i)];
+                                utxo_set_cache.insert(HashIdOutPoint::new(txid, vout as u32), output.value);
                             }
                         }
                     }
@@ -875,7 +888,7 @@ impl InsertThread {
                             inputs_utxo_map.insert(k, v);
                         }
 
-                    processing_tx
+                    query_fmt_tx
                         .send((
                             batch_id,
                             blocks,
@@ -887,9 +900,9 @@ impl InsertThread {
             })
         });
 
-        let processing_thread = std::thread::spawn({
-            fn_log_err("pg_processing", move || {
-                while let Ok((batch_id, blocks, inputs_utxo_map)) = processing_rx.recv() {
+        let query_fmt_thread = std::thread::spawn({
+            fn_log_err("pg_query_fmt", move || {
+                while let Ok((batch_id, blocks, inputs_utxo_map)) = query_fmt_rx.recv() {
 
                   let mut event_q = String::new();
                   let mut block_q = String::new();
@@ -979,7 +992,7 @@ impl InsertThread {
         Ok(InsertThread {
             tx: Some(utxo_fetching_tx),
             utxo_fetching_thread: Some(utxo_fetching_thread),
-            query_fmt_thread: Some(processing_thread),
+            query_fmt_thread: Some(query_fmt_thread),
             writer_thread: Some(writer_thread),
         })
     }
