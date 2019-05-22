@@ -52,15 +52,14 @@ CREATE TABLE IF NOT EXISTS output (
 );
 
 CREATE TABLE IF NOT EXISTS input (
-  output_tx_hash_id BIGINT NOT NULL, -- output id this tx input spends
+  output_tx_hash_id BYTEA NOT NULL, -- output id this tx input spends
   output_tx_idx INT NOT NULL,
-  tx_hash_id BIGINT NOT NULL -- tx id this input is from
+  tx_hash_id BYTEA NOT NULL -- tx id this input is from
 );
 
 CREATE TABLE IF NOT EXISTS mempool (
-  output_tx_hash_id BIGINT NOT NULL, -- output id this tx input spends
-  output_tx_idx INT NOT NULL,
-  tx_hash_id BIGINT NOT NULL -- tx id this input is from
+  output_tx_hash_id BYTEA NOT NULL, -- output id this tx input spends
+  ts TIMESTAMPZ NOT NULL
 );
 
 /* FIXME

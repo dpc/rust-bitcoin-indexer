@@ -265,7 +265,7 @@ impl<'a> OutputFormatter<'a> {
         Self {
             output: SqlFormatter::new(
                 output_s,
-                "INSERT INTO output (tx_hash_id, tx_idx, value, address) VALUES ",
+                "INSERT INTO output(tx_hash_id, tx_idx, value, address)VALUES",
                 mode,
             ),
         }
@@ -300,7 +300,7 @@ impl<'a> InputFormatter<'a> {
         Self {
             input: SqlFormatter::new(
                 input_s,
-                "INSERT INTO input (output_tx_hash_id, output_tx_idx, tx_hash_id) VALUES",
+                "INSERT INTO input(output_tx_hash_id, output_tx_idx, tx_hash_id)VALUES",
                 mode,
             ),
         }
@@ -342,7 +342,7 @@ impl<'a> TxFormatter<'a> {
         Self {
             block_tx: SqlFormatter::new(
                 block_tx_s,
-                "INSERT INTO block_tx (block_hash_id, tx_hash_id) VALUES",
+                "INSERT INTO block_tx(block_hash_id, tx_hash_id)VALUES",
                 mode,
             ),
             tx: SqlFormatter::new(
@@ -398,7 +398,26 @@ impl<'a> TxFormatter<'a> {
 
 
     fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction) {
-        let tx_id = tx.txid();
+
+        let is_coinbase = tx.is_coin_base();
+
+        let tx_id = if block.height == 91842 && is_coinbase {
+            // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
+            // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
+            //
+            // are twice in the blockchain; eg.
+            // https://blockchair.com/bitcoin/block/91812
+            // https://blockchair.com/bitcoin/block/91842
+            // to make the unique indexes happy, we just add one to last byte
+
+            TxHash::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
+                .unwrap()
+        } else if block.height == 91880 && is_coinbase {
+            TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
+                .unwrap()
+        } else {
+            tx.txid()
+        };
 
         let fee = if tx.is_coin_base() {
             0
@@ -424,7 +443,7 @@ impl<'a> TxFormatter<'a> {
             self.output_fmt.fmt(&tx_id, output, idx as u32);
         }
 
-        if !tx.is_coin_base() {
+        if !is_coinbase {
             for input in &tx.input {
                 self.input_fmt.fmt(&tx_id, input);
             }
