@@ -328,6 +328,7 @@ struct TxFormatter<'a> {
     input_fmt: InputFormatter<'a>,
 
     inputs_utxo_map: UtxoMap,
+    tx_ids: TxIdMap,
 }
 
 
@@ -339,6 +340,7 @@ impl<'a> TxFormatter<'a> {
         input_s: &'a mut String,
         mode: Mode,
         inputs_utxo_map: UtxoMap,
+        tx_ids: TxIdMap,
     ) -> Self {
         Self {
             block_tx: SqlFormatter::new(
@@ -360,6 +362,7 @@ impl<'a> TxFormatter<'a> {
                 mode,
             ),
             inputs_utxo_map,
+            tx_ids,
         }
     }
 
@@ -398,7 +401,7 @@ impl<'a> TxFormatter<'a> {
     }
 
 
-    fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction) {
+    fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction, tx_i: usize) {
 
         let is_coinbase = tx.is_coin_base();
 
@@ -417,7 +420,7 @@ impl<'a> TxFormatter<'a> {
             TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
                 .unwrap()
         } else {
-            tx.txid()
+            self.tx_ids[&(block.height, tx_i)]
         };
 
         let fee = if tx.is_coin_base() {
@@ -470,6 +473,7 @@ impl<'a> BlockFormatter<'a> {
         input_s: &'a mut String,
         mode: Mode,
         inputs_utxo_map: UtxoMap,
+        tx_ids: TxIdMap,
     ) -> Self {
         BlockFormatter {
 
@@ -490,6 +494,7 @@ impl<'a> BlockFormatter<'a> {
                 input_s,
                 mode,
                 inputs_utxo_map,
+                tx_ids,
             ),
         }
     }
@@ -525,8 +530,8 @@ impl<'a> BlockFormatter<'a> {
 
         self.fmt_one(block);
 
-        for tx in &block.data.txdata {
-            self.tx_fmt.fmt(block, tx);
+        for (tx_i, tx) in block.data.txdata.iter().enumerate() {
+            self.tx_fmt.fmt(block, tx, tx_i);
         }
     }
 }
@@ -827,6 +832,8 @@ impl fmt::Display for Mode {
     }
 }
 
+type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
+
 impl InsertThread {
     fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Result<Self> {
         // We use only rendezvous (0-size) channels, to allow passing
@@ -835,7 +842,7 @@ impl InsertThread {
         // improve performance, and more things in flight means
         // incrased memory usage.
         let (utxo_fetching_tx, utxo_fetching_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
-        let (query_fmt_tx, query_fmt_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap)>(0);
+        let (query_fmt_tx, query_fmt_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap )>(0);
         let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
             u64,
             Vec<String>,
@@ -853,8 +860,7 @@ impl InsertThread {
 
                 while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
 
-                    // TODO: use this elsewhere
-                    let tx_ids : HashMap<(BlockHeight, usize), BlockHash> =
+                    let tx_ids : TxIdMap =
                         blocks.par_iter().flat_map(
                             move |block|
                               block.data.txdata.par_iter()
@@ -893,6 +899,7 @@ impl InsertThread {
                             batch_id,
                             blocks,
                             inputs_utxo_map,
+                            tx_ids
                         ))
                         .expect("Send not fail");
                 }
@@ -902,7 +909,7 @@ impl InsertThread {
 
         let query_fmt_thread = std::thread::spawn({
             fn_log_err("pg_query_fmt", move || {
-                while let Ok((batch_id, blocks, inputs_utxo_map)) = query_fmt_rx.recv() {
+                while let Ok((batch_id, blocks, inputs_utxo_map, tx_ids)) = query_fmt_rx.recv() {
 
                   let mut event_q = String::new();
                   let mut block_q = String::new();
@@ -920,6 +927,7 @@ impl InsertThread {
                       &mut input_q,
                       mode,
                       inputs_utxo_map,
+                      tx_ids,
                   );
 
                     let mut tx_len = 0;
