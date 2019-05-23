@@ -26,6 +26,30 @@ pub fn establish_connection(url: &str) -> Result<Connection> {
     }
 }
 
+fn calculate_tx_id_with_workarounds(
+    block: &BlockCore,
+    tx: &bitcoin::blockdata::transaction::Transaction,
+) -> Sha256dHash {
+    let is_coinbase = tx.is_coin_base();
+    if block.height == 91842 && is_coinbase {
+        // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
+        // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
+        //
+        // are twice in the blockchain; eg.
+        // https://blockchair.com/bitcoin/block/91812
+        // https://blockchair.com/bitcoin/block/91842
+        // to make the unique indexes happy, we just add one to last byte
+
+        TxHash::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
+            .unwrap()
+    } else if block.height == 91880 && is_coinbase {
+        TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
+            .unwrap()
+    } else {
+        tx.txid()
+    }
+}
+
 fn write_hash_id_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
     hash.clone().into_inner()[..SQL_HASH_ID_SIZE]
         .as_ref()
@@ -387,24 +411,7 @@ impl<'a> TxFormatter<'a> {
 
     fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction, tx_i: usize) {
         let is_coinbase = tx.is_coin_base();
-
-        let tx_id = if block.height == 91842 && is_coinbase {
-            // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
-            // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
-            //
-            // are twice in the blockchain; eg.
-            // https://blockchair.com/bitcoin/block/91812
-            // https://blockchair.com/bitcoin/block/91842
-            // to make the unique indexes happy, we just add one to last byte
-
-            TxHash::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
-                .unwrap()
-        } else if block.height == 91880 && is_coinbase {
-            TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
-                .unwrap()
-        } else {
-            self.tx_ids[&(block.height, tx_i)]
-        };
+        let tx_id = self.tx_ids[&(block.height, tx_i)];
 
         let fee = if tx.is_coin_base() {
             0
@@ -628,7 +635,7 @@ struct HashIdOutPoint {
 }
 
 impl HashIdOutPoint {
-    fn new(tx_hash: &Sha256dHash, idx: u32) -> Self {
+    fn from_tx_hash_and_idx(tx_hash: &Sha256dHash, idx: u32) -> Self {
         Self {
             tx_hash_id: hash_to_hash_id(&tx_hash),
             vout: idx,
@@ -711,12 +718,13 @@ impl UtxoSetCache {
             },
             |duration, _| {
                 debug!(
-                    "Fetched {} missing outputs in {}s",
+                    "Fetched {} missing outputs in {}ms",
                     missing_len,
-                    duration.as_secs()
+                    duration.as_millis()
                 )
             },
         )?;
+        assert_eq!(missing_len, out.len());
         Ok(out)
     }
 }
@@ -747,21 +755,21 @@ fn execute_bulk_insert_queries(
             || Ok(transaction.batch_execute(&s)?),
             |duration, _| {
                 debug!(
-                    "Executed query {} of batch {} in {}",
+                    "Executed query {} of batch {} in {}ms",
                     i,
                     batch_id,
-                    duration.as_secs()
+                    duration.as_millis()
                 );
             },
         )?;
     }
     transaction.commit()?;
     trace!(
-        "Inserted {} {} from batch {} in {}s",
+        "Inserted {} {} from batch {} in {}ms",
         len,
         name,
         batch_id,
-        Instant::now().duration_since(start).as_secs()
+        Instant::now().duration_since(start).as_millis()
     );
     Ok(())
 }
@@ -852,73 +860,78 @@ impl InsertThread {
         let (writer_tx, writer_rx) =
             crossbeam_channel::bounded::<(u64, Vec<String>, HashSet<BlockHash>, u64, usize)>(0);
 
-        let utxo_fetching_thread =
-            std::thread::spawn({
-                let url = url.clone();
-                let conn = establish_connection(&url)?;
-                fn_log_err("pg_utxo_fetching", move || {
-                    let mut utxo_set_cache = UtxoSetCache::default();
+        let utxo_fetching_thread = std::thread::spawn({
+            let url = url.clone();
+            let conn = establish_connection(&url)?;
+            fn_log_err("pg_utxo_fetching", move || {
+                let mut utxo_set_cache = UtxoSetCache::default();
 
-                    while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
-                        let tx_ids: TxIdMap =
-                            trace_time(
-                                || {
-                                    Ok(blocks
-                                        .par_iter()
-                                        .flat_map(move |block| {
-                                            block.data.txdata.par_iter().enumerate().map(
-                                                move |(tx_i, tx)| (block.height, tx_i, tx.txid()),
+                while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
+                    let tx_ids: TxIdMap = trace_time(
+                        || {
+                            Ok(blocks
+                                .par_iter()
+                                .flat_map(move |block| {
+                                    block.data.txdata.par_iter().enumerate().map(
+                                        move |(tx_i, tx)| {
+                                            (
+                                                block.height,
+                                                tx_i,
+                                                calculate_tx_id_with_workarounds(block, tx),
                                             )
-                                        })
-                                        .map(|(h, tx_i, txid)| ((h, tx_i), txid))
-                                        .collect())
-                                },
-                                |duration, tx_ids: &TxIdMap| {
-                                    debug!(
-                                        "Calculated txids of {} txs in {}s",
-                                        tx_ids.len(),
-                                        duration.as_secs()
+                                        },
                                     )
-                                },
-                            )?;
+                                })
+                                .map(|(h, tx_i, txid)| ((h, tx_i), txid))
+                                .collect())
+                        },
+                        |duration, tx_ids: &TxIdMap| {
+                            debug!(
+                                "Calculated txids of {} txs in {}ms",
+                                tx_ids.len(),
+                                duration.as_millis()
+                            )
+                        },
+                    )?;
 
-                        let (mut inputs_utxo_map, missing) = trace_time(
-                            || {
-                                for block in &blocks {
-                                    for (tx_i, tx) in block.data.txdata.iter().enumerate() {
-                                        for (vout, output) in tx.output.iter().enumerate() {
-                                            let txid = &tx_ids[&(block.height, tx_i)];
-                                            utxo_set_cache.insert(
-                                                HashIdOutPoint::new(txid, vout as u32),
-                                                output.value,
-                                            );
-                                        }
+                    let (mut inputs_utxo_map, missing) = trace_time(
+                        || {
+                            for block in &blocks {
+                                for (tx_i, tx) in block.data.txdata.iter().enumerate() {
+                                    for (idx, output) in tx.output.iter().enumerate() {
+                                        let txid = &tx_ids[&(block.height, tx_i)];
+                                        utxo_set_cache.insert(
+                                            HashIdOutPoint::from_tx_hash_and_idx(txid, idx as u32),
+                                            output.value,
+                                        );
                                     }
                                 }
+                            }
 
-                                Ok(utxo_set_cache.consume(
-                                    blocks
-                                        .iter()
-                                        .flat_map(|block| &block.data.txdata)
-                                        .flat_map(|tx| &tx.input)
-                                        .map(|input| input.previous_output),
-                                ))
-                            },
-                            |duration, _| debug!("Modified utxo_cache in {}s", duration.as_secs()),
-                        )?;
+                            Ok(utxo_set_cache.consume(
+                                blocks
+                                    .iter()
+                                    .flat_map(|block| &block.data.txdata)
+                                    .filter(|tx| !tx.is_coin_base())
+                                    .flat_map(|tx| &tx.input)
+                                    .map(|input| input.previous_output),
+                            ))
+                        },
+                        |duration, _| debug!("Modified utxo_cache in {}ms", duration.as_millis()),
+                    )?;
 
-                        let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
-                        for (k, v) in missing.into_iter() {
-                            inputs_utxo_map.insert(k, v);
-                        }
-
-                        query_fmt_tx
-                            .send((batch_id, blocks, inputs_utxo_map, tx_ids))
-                            .expect("Send not fail");
+                    let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
+                    for (k, v) in missing.into_iter() {
+                        inputs_utxo_map.insert(k, v);
                     }
-                    Ok(())
-                })
-            });
+
+                    query_fmt_tx
+                        .send((batch_id, blocks, inputs_utxo_map, tx_ids))
+                        .expect("Send not fail");
+                }
+                Ok(())
+            })
+        });
 
         let query_fmt_thread = std::thread::spawn({
             fn_log_err("pg_query_fmt", move || {
@@ -953,7 +966,7 @@ impl InsertThread {
                             drop(formatter);
                             Ok(())
                         },
-                        |duration, _| debug!("Formatted queries in {}s", duration.as_secs()),
+                        |duration, _| debug!("Formatted queries in {}ms", duration.as_millis()),
                     )?;
 
                     let max_block_height = blocks
@@ -1490,6 +1503,9 @@ impl Postresql {
         self.chain_block_count += 1;
 
         assert!(!self.batch.is_empty());
+
+        // TODO: this is actually totally atomic reorg
+        // The whole insertion of new blocks has to be done in the same transaction
 
         transaction.commit()?;
 
