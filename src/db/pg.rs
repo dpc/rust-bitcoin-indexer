@@ -710,7 +710,7 @@ impl UtxoSetCache {
                 Ok(())
             },
             |duration, _| {
-                trace!(
+                debug!(
                     "Fetched {} missing outputs in {}s",
                     missing_len,
                     duration.as_secs()
@@ -746,7 +746,7 @@ fn execute_bulk_insert_queries(
         trace_time(
             || Ok(transaction.batch_execute(&s)?),
             |duration, _| {
-                trace!(
+                debug!(
                     "Executed query {} of batch {} in {}",
                     i,
                     batch_id,
@@ -874,7 +874,7 @@ impl InsertThread {
                                         .collect())
                                 },
                                 |duration, tx_ids: &TxIdMap| {
-                                    trace!(
+                                    debug!(
                                         "Calculated txids of {} txs in {}s",
                                         tx_ids.len(),
                                         duration.as_secs()
@@ -904,7 +904,7 @@ impl InsertThread {
                                         .map(|input| input.previous_output),
                                 ))
                             },
-                            |duration, _| trace!("Modified utxo_cache in {}s", duration.as_secs()),
+                            |duration, _| debug!("Modified utxo_cache in {}s", duration.as_secs()),
                         )?;
 
                         let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
@@ -953,7 +953,7 @@ impl InsertThread {
                             drop(formatter);
                             Ok(())
                         },
-                        |duration, _| trace!("Formatted queries in {}s", duration.as_secs()),
+                        |duration, _| debug!("Formatted queries in {}s", duration.as_secs()),
                     )?;
 
                     let max_block_height = blocks
@@ -1320,14 +1320,12 @@ impl Postresql {
         debug_assert!(!self.are_workers_stopped());
         debug_assert!(self.pending_reorg.is_empty());
 
-        /*
         trace!(
             "Inserting at tip block {}H {} when chain_block_count = {}",
             block.height,
             block.id,
             self.chain_block_count
         );
-        */
 
         // if we extend, we can't make holes
         assert!(block.height <= self.chain_block_count);

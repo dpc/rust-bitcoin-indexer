@@ -309,7 +309,7 @@ where
             }
 
             loop {
-                debug!(
+                trace!(
                     "Waiting for the block from the workers at: {}H",
                     self.cur_height
                 );
@@ -319,7 +319,7 @@ where
                     .expect("rx available")
                     .recv()
                     .expect("Workers shouldn't disconnect");
-                debug!(
+                trace!(
                     "Got the block from the workers from: {}H",
                     item.block.height
                 );
