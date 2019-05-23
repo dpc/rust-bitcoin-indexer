@@ -1,17 +1,16 @@
 use bitcoin_indexer::{db, node::fetcher, prelude::*, util::reversed};
 use itertools::Itertools;
-use std::{borrow::Borrow, sync::Arc, env};
+use std::{borrow::Borrow, env, sync::Arc};
 
 use common_failures::quick_main;
 
 fn run() -> Result<()> {
     env_logger::init();
     dotenv::dotenv()?;
-    let db_url= env::var("DATABASE_URL")?;
-            let node_url= env::var("NODE_RPC_URL")?;
+    let db_url = env::var("DATABASE_URL")?;
+    let node_url = env::var("NODE_RPC_URL")?;
 
-    let rpc_info =
-        bitcoin_indexer::RpcInfo::from_url(&node_url)?;
+    let rpc_info = bitcoin_indexer::RpcInfo::from_url(&node_url)?;
     let db = db::pg::establish_connection(&db_url)?;
     db.execute(
         "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS merkle_root BYTEA",

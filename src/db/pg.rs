@@ -2,17 +2,17 @@ use log::{debug, error, info, trace};
 
 use super::*;
 use crate::{BlockHash, BlockHeight};
+use bitcoin::blockdata;
+use hex::ToHex;
+use itertools::Itertools;
 use postgres::{Connection, TlsMode};
+use rayon::prelude::*;
 use std::{
-    collections::{HashMap,  HashSet},
+    collections::{HashMap, HashSet},
     fmt::{self, Write},
     sync::{Arc, Mutex},
     time::Instant,
 };
-use bitcoin::blockdata;
-use hex::ToHex;
-use itertools::Itertools;
-use rayon::prelude::*;
 
 pub fn establish_connection(url: &str) -> Result<Connection> {
     loop {
@@ -26,12 +26,16 @@ pub fn establish_connection(url: &str) -> Result<Connection> {
     }
 }
 
-fn write_hash_id_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result<> {
-    hash.clone().into_inner()[..SQL_HASH_ID_SIZE].as_ref().write_hex(w)
+fn write_hash_id_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
+    hash.clone().into_inner()[..SQL_HASH_ID_SIZE]
+        .as_ref()
+        .write_hex(w)
 }
 
 fn write_hash_rest_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
-    hash.clone().into_inner()[SQL_HASH_ID_SIZE..].as_ref().write_hex(w)
+    hash.clone().into_inner()[SQL_HASH_ID_SIZE..]
+        .as_ref()
+        .write_hex(w)
 }
 
 fn write_hash_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
@@ -66,10 +70,9 @@ fn hash_to_db_vec(hash: &BlockHash) -> Vec<u8> {
     v
 }*/
 
-const SQL_INSERT_VALUES_SIZE : usize = 9000;
-const SQL_HASH_ID_SIZE : usize = 16;
+const SQL_INSERT_VALUES_SIZE: usize = 9000;
+const SQL_HASH_ID_SIZE: usize = 16;
 // const SQL_HASH_REST_SIZE : usize = 32 - SQL_HASH_ID_SIZE;
-
 
 /*
 fn get_hash_from_id_and_rest(row: &postgres::rows::Row, index_first: usize) -> BlockHash {
@@ -207,18 +210,16 @@ struct SqlFormatter<'a> {
 }
 
 impl<'a> SqlFormatter<'a> {
-    fn new(
-        out: &'a mut String,
-        opening: &'static str,
-        mode: Mode
-        ) -> Self {
+    fn new(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
         Self {
-            out, opening, mode, count: 0
+            out,
+            opening,
+            mode,
+            count: 0,
         }
     }
 
     fn fmt_with(&mut self, f: impl FnOnce(&mut String)) {
-
         self.maybe_flush();
         if self.count == 0 {
             self.out.write_str(self.opening).unwrap();
@@ -258,11 +259,7 @@ struct OutputFormatter<'a> {
 }
 
 impl<'a> OutputFormatter<'a> {
-
-    fn new(
-        output_s: &'a mut String,
-        mode: Mode,
-    ) -> Self {
+    fn new(output_s: &'a mut String, mode: Mode) -> Self {
         Self {
             output: SqlFormatter::new(
                 output_s,
@@ -277,27 +274,25 @@ impl<'a> OutputFormatter<'a> {
         self.output.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
-            s.write_fmt(format_args!("'::bytea,{},{},{})", vout, output.value,
-
-            crate::util::bitcoin::address_from_script(&output.script_pubkey, network)
-                .map(|a| format!("'{}'", a)).unwrap_or_else(|| "NULL".into())
-
-                                    )).unwrap();
+            s.write_fmt(format_args!(
+                "'::bytea,{},{},{})",
+                vout,
+                output.value,
+                crate::util::bitcoin::address_from_script(&output.script_pubkey, network)
+                    .map(|a| format!("'{}'", a))
+                    .unwrap_or_else(|| "NULL".into())
+            ))
+            .unwrap();
         });
     }
 }
-
 
 struct InputFormatter<'a> {
     input: SqlFormatter<'a>,
 }
 
 impl<'a> InputFormatter<'a> {
-
-    fn new(
-        input_s: &'a mut String,
-        mode: Mode,
-    ) -> Self {
+    fn new(input_s: &'a mut String, mode: Mode) -> Self {
         Self {
             input: SqlFormatter::new(
                 input_s,
@@ -308,17 +303,16 @@ impl<'a> InputFormatter<'a> {
     }
 
     fn fmt(&mut self, tx_id: &Sha256dHash, input: &blockdata::transaction::TxIn) {
-
         self.input.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &input.previous_output.txid).unwrap();
-            s.write_fmt(format_args!("'::bytea,{},'\\x", input.previous_output.vout)).unwrap();
+            s.write_fmt(format_args!("'::bytea,{},'\\x", input.previous_output.vout))
+                .unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
             s.write_str("'::bytea)").unwrap();
         });
     }
 }
-
 
 struct TxFormatter<'a> {
     block_tx: SqlFormatter<'a>,
@@ -330,7 +324,6 @@ struct TxFormatter<'a> {
     inputs_utxo_map: UtxoMap,
     tx_ids: TxIdMap,
 }
-
 
 impl<'a> TxFormatter<'a> {
     fn new(
@@ -353,26 +346,20 @@ impl<'a> TxFormatter<'a> {
                 "INSERT INTO tx (hash_id, hash_rest, weight, fee, coinbase) VALUES",
                 mode,
             ),
-            output_fmt: OutputFormatter::new(
-                output_s,
-                mode,
-            ),
-            input_fmt: InputFormatter::new(
-                input_s,
-                mode,
-            ),
+            output_fmt: OutputFormatter::new(output_s, mode),
+            input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
             tx_ids,
         }
     }
-
 
     fn fmt_one(
         &mut self,
         block: &BlockCore,
         tx: &blockdata::transaction::Transaction,
         tx_id: &Sha256dHash,
-        fee: u64) {
+        fee: u64,
+    ) {
         self.block_tx.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &block.id).unwrap();
@@ -388,7 +375,6 @@ impl<'a> TxFormatter<'a> {
             s.write_str("'::bytea,'\\x").unwrap();
             write_hash_rest_hex(s, &tx_id).unwrap();
 
-
             s.write_fmt(format_args!(
                 "'::bytea,{},{},{})",
                 tx.get_weight(),
@@ -396,13 +382,10 @@ impl<'a> TxFormatter<'a> {
                 tx.is_coin_base()
             ))
             .unwrap();
-
         });
     }
 
-
     fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction, tx_i: usize) {
-
         let is_coinbase = tx.is_coin_base();
 
         let tx_id = if block.height == 91842 && is_coinbase {
@@ -426,17 +409,14 @@ impl<'a> TxFormatter<'a> {
         let fee = if tx.is_coin_base() {
             0
         } else {
-            let input_value_sum = tx
-                .input
-                .iter()
-                .fold(0, |acc, input| {
-                     let p = HashIdOutPoint {
-                         tx_hash_id: hash_to_hash_id(&input.previous_output.txid),
-                         vout: input.previous_output.vout
-                     };
-                     acc + self.inputs_utxo_map[&p].value
-                 });
-         let output_value_sum = tx.output.iter().fold(0, |acc, output| acc + output.value);
+            let input_value_sum = tx.input.iter().fold(0, |acc, input| {
+                let p = HashIdOutPoint {
+                    tx_hash_id: hash_to_hash_id(&input.previous_output.txid),
+                    vout: input.previous_output.vout,
+                };
+                acc + self.inputs_utxo_map[&p].value
+            });
+            let output_value_sum = tx.output.iter().fold(0, |acc, output| acc + output.value);
             assert!(output_value_sum <= input_value_sum);
             input_value_sum - output_value_sum
         };
@@ -454,7 +434,6 @@ impl<'a> TxFormatter<'a> {
         }
     }
 }
-
 
 struct BlockFormatter<'a> {
     event: SqlFormatter<'a>,
@@ -522,12 +501,12 @@ impl<'a> BlockFormatter<'a> {
             s.write_fmt(format_args!(
                 "'::bytea,{},{})",
                 block.height, block.data.header.time
-            )).unwrap();
+            ))
+            .unwrap();
         });
     }
 
     fn fmt(&mut self, block: &BlockCore) {
-
         self.fmt_one(block);
 
         for (tx_i, tx) in block.data.txdata.iter().enumerate() {
@@ -535,7 +514,6 @@ impl<'a> BlockFormatter<'a> {
         }
     }
 }
-
 
 /*
 
@@ -609,29 +587,33 @@ fn create_bulk_insert_inputs_query(
 }
 
 */
-fn create_fetch_outputs_query<'a>(outputs: impl Iterator<Item=&'a HashIdOutPoint>) -> Vec<String> {
-
-    outputs.chunks(SQL_INSERT_VALUES_SIZE).into_iter().map(|chunk| {
-
-        let mut q: String = r#"
+fn create_fetch_outputs_query<'a>(
+    outputs: impl Iterator<Item = &'a HashIdOutPoint>,
+) -> Vec<String> {
+    outputs
+        .chunks(SQL_INSERT_VALUES_SIZE)
+        .into_iter()
+        .map(|chunk| {
+            let mut q: String = r#"
         SELECT tx_hash_id, tx_idx, value
         FROM output
         WHERE (tx_hash_id, tx_idx) IN ( VALUES "#
-        .into();
+                .into();
 
-        for (i, output) in chunk.enumerate() {
-            if i > 0 {
-                q.push_str(",")
+            for (i, output) in chunk.enumerate() {
+                if i > 0 {
+                    q.push_str(",")
+                }
+                q.push_str("('\\x");
+                write_hex(&mut q, &output.tx_hash_id).unwrap();
+                q.push_str("'::bytea");
+                q.push_str(",");
+                q.write_fmt(format_args!("{})", output.vout)).unwrap();
             }
-            q.push_str("('\\x");
-            write_hex(&mut q, &output.tx_hash_id).unwrap();
-            q.push_str("'::bytea");
-            q.push_str(",");
-            q.write_fmt(format_args!("{})", output.vout)).unwrap();
-        }
-        q.write_str(");").expect("Write to string can't fail");
-        q
-    }).collect()
+            q.write_str(");").expect("Write to string can't fail");
+            q
+        })
+        .collect()
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -701,10 +683,7 @@ impl UtxoSetCache {
         (found, missing)
     }
 
-    fn fetch_missing(
-        conn: &Connection,
-        missing: &[HashIdOutPoint],
-    ) -> Result<UtxoMap> {
+    fn fetch_missing(conn: &Connection, missing: &[HashIdOutPoint]) -> Result<UtxoMap> {
         if missing.is_empty() {
             return Ok(HashMap::default());
         }
@@ -713,28 +692,45 @@ impl UtxoSetCache {
         let mut out = HashMap::default();
         debug!("Fetching {} missing outputs", missing_len);
 
-        let start = Instant::now();
-        for q in create_fetch_outputs_query(missing.iter()) {
-            for row in &conn.query(&q, &[])? {
-                out.insert(
-                    HashIdOutPoint {
-                        tx_hash_id: row.get::<_, Vec<u8>>(0),
-                        vout: row.get::<_, i32>(1) as u32,
-                    },
-                    UtxoSetEntry {
-                        value: row.get::<_, i64>(2) as u64,
-                    },
-                );
-            }
-        }
-
-        trace!(
-            "Fetched {} missing outputs in {}s",
-            missing_len,
-            Instant::now().duration_since(start).as_secs()
-        );
+        trace_time(
+            || {
+                for q in create_fetch_outputs_query(missing.iter()) {
+                    for row in &conn.query(&q, &[])? {
+                        out.insert(
+                            HashIdOutPoint {
+                                tx_hash_id: row.get::<_, Vec<u8>>(0),
+                                vout: row.get::<_, i32>(1) as u32,
+                            },
+                            UtxoSetEntry {
+                                value: row.get::<_, i64>(2) as u64,
+                            },
+                        );
+                    }
+                }
+                Ok(())
+            },
+            |duration, _| {
+                trace!(
+                    "Fetched {} missing outputs in {}s",
+                    missing_len,
+                    duration.as_secs()
+                )
+            },
+        )?;
         Ok(out)
     }
+}
+
+fn trace_time<T>(
+    body: impl FnOnce() -> Result<T>,
+    result: impl FnOnce(std::time::Duration, &T),
+) -> Result<T> {
+    let start = Instant::now();
+
+    let res = body()?;
+    result(Instant::now().duration_since(start), &res);
+
+    Ok(res)
 }
 
 fn execute_bulk_insert_queries(
@@ -744,11 +740,20 @@ fn execute_bulk_insert_queries(
     batch_id: u64,
     queries: impl Iterator<Item = String>,
 ) -> Result<()> {
-    debug!("Inserting {} {} from batch {}...", len, name, batch_id);
     let start = Instant::now();
     let transaction = conn.transaction()?;
-    for s in queries {
-        transaction.batch_execute(&s)?;
+    for (i, s) in queries.into_iter().enumerate() {
+        trace_time(
+            || Ok(transaction.batch_execute(&s)?),
+            |duration, _| {
+                trace!(
+                    "Executed query {} of batch {} in {}",
+                    i,
+                    batch_id,
+                    duration.as_secs()
+                );
+            },
+        )?;
     }
     transaction.commit()?;
     trace!(
@@ -760,7 +765,6 @@ fn execute_bulk_insert_queries(
     );
     Ok(())
 }
-
 
 type BlocksInFlight = HashSet<BlockHash>;
 
@@ -841,104 +845,123 @@ impl InsertThread {
         // work in the channels. Buffered work does not
         // improve performance, and more things in flight means
         // incrased memory usage.
-        let (utxo_fetching_tx, utxo_fetching_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
-        let (query_fmt_tx, query_fmt_rx) = crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap )>(0);
-        let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
-            u64,
-            Vec<String>,
-            HashSet<BlockHash>,
-            u64,
-            usize,
-        )>(0);
+        let (utxo_fetching_tx, utxo_fetching_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
+        let (query_fmt_tx, query_fmt_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap)>(0);
+        let (writer_tx, writer_rx) =
+            crossbeam_channel::bounded::<(u64, Vec<String>, HashSet<BlockHash>, u64, usize)>(0);
 
-        let utxo_fetching_thread = std::thread::spawn({
-            let url = url.clone();
-            let conn = establish_connection(&url)?;
-            fn_log_err("pg_utxo_fetching", move || {
+        let utxo_fetching_thread =
+            std::thread::spawn({
+                let url = url.clone();
+                let conn = establish_connection(&url)?;
+                fn_log_err("pg_utxo_fetching", move || {
+                    let mut utxo_set_cache = UtxoSetCache::default();
 
-                let mut utxo_set_cache = UtxoSetCache::default();
+                    while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
+                        let tx_ids: TxIdMap =
+                            trace_time(
+                                || {
+                                    Ok(blocks
+                                        .par_iter()
+                                        .flat_map(move |block| {
+                                            block.data.txdata.par_iter().enumerate().map(
+                                                move |(tx_i, tx)| (block.height, tx_i, tx.txid()),
+                                            )
+                                        })
+                                        .map(|(h, tx_i, txid)| ((h, tx_i), txid))
+                                        .collect())
+                                },
+                                |duration, tx_ids: &TxIdMap| {
+                                    trace!(
+                                        "Calculated txids of {} txs in {}s",
+                                        tx_ids.len(),
+                                        duration.as_secs()
+                                    )
+                                },
+                            )?;
 
-                while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
+                        let (mut inputs_utxo_map, missing) = trace_time(
+                            || {
+                                for block in &blocks {
+                                    for (tx_i, tx) in block.data.txdata.iter().enumerate() {
+                                        for (vout, output) in tx.output.iter().enumerate() {
+                                            let txid = &tx_ids[&(block.height, tx_i)];
+                                            utxo_set_cache.insert(
+                                                HashIdOutPoint::new(txid, vout as u32),
+                                                output.value,
+                                            );
+                                        }
+                                    }
+                                }
 
-                    let tx_ids : TxIdMap =
-                        blocks.par_iter().flat_map(
-                            move |block|
-                              block.data.txdata.par_iter()
-                                  .enumerate()
-                                  .map(move |(tx_i, tx)|
-                                     (block.height, tx_i, tx.txid())
-                                   )
-                                   ).map( |(h, tx_i, txid)| ((h, tx_i), txid))
-                                     .collect();
+                                Ok(utxo_set_cache.consume(
+                                    blocks
+                                        .iter()
+                                        .flat_map(|block| &block.data.txdata)
+                                        .flat_map(|tx| &tx.input)
+                                        .map(|input| input.previous_output),
+                                ))
+                            },
+                            |duration, _| trace!("Modified utxo_cache in {}s", duration.as_secs()),
+                        )?;
 
-
-                    for block in &blocks {
-                        for (tx_i, tx) in block.data.txdata.iter().enumerate() {
-                            for (vout, output) in tx.output.iter().enumerate() {
-                                let txid = &tx_ids[&(block.height, tx_i)];
-                                utxo_set_cache.insert(HashIdOutPoint::new(txid, vout as u32), output.value);
-                            }
-                        }
-                    }
-
-                    let (mut inputs_utxo_map, missing) =
-                        utxo_set_cache.consume(
-
-                            blocks.iter().flat_map(|block| &block.data.txdata)
-                            .flat_map(|tx| &tx.input)
-                            .map(|input| input.previous_output)
-                        );
-
-                    let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
-                    for (k, v) in missing.into_iter() {
+                        let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
+                        for (k, v) in missing.into_iter() {
                             inputs_utxo_map.insert(k, v);
                         }
 
-                    query_fmt_tx
-                        .send((
-                            batch_id,
-                            blocks,
-                            inputs_utxo_map,
-                            tx_ids
-                        ))
-                        .expect("Send not fail");
-                }
-                Ok(())
-            })
-        });
+                        query_fmt_tx
+                            .send((batch_id, blocks, inputs_utxo_map, tx_ids))
+                            .expect("Send not fail");
+                    }
+                    Ok(())
+                })
+            });
 
         let query_fmt_thread = std::thread::spawn({
             fn_log_err("pg_query_fmt", move || {
                 while let Ok((batch_id, blocks, inputs_utxo_map, tx_ids)) = query_fmt_rx.recv() {
+                    let mut event_q = String::new();
+                    let mut block_q = String::new();
+                    let mut block_tx_q = String::new();
+                    let mut tx_q = String::new();
+                    let mut output_q = String::new();
+                    let mut input_q = String::new();
 
-                  let mut event_q = String::new();
-                  let mut block_q = String::new();
-                  let mut block_tx_q = String::new();
-                  let mut tx_q = String::new();
-                  let mut output_q = String::new();
-                  let mut input_q = String::new();
-
-                  let mut formatter = BlockFormatter::new(
-                      &mut event_q,
-                      &mut block_q,
-                      &mut block_tx_q,
-                      &mut tx_q,
-                      &mut output_q,
-                      &mut input_q,
-                      mode,
-                      inputs_utxo_map,
-                      tx_ids,
-                  );
+                    let mut formatter = BlockFormatter::new(
+                        &mut event_q,
+                        &mut block_q,
+                        &mut block_tx_q,
+                        &mut tx_q,
+                        &mut output_q,
+                        &mut input_q,
+                        mode,
+                        inputs_utxo_map,
+                        tx_ids,
+                    );
 
                     let mut tx_len = 0;
 
-                    for block in &blocks {
-                        tx_len += block.data.txdata.len();
-                        formatter.fmt(block);
-                    }
-                    drop(formatter);
+                    trace_time(
+                        || {
+                            for block in &blocks {
+                                tx_len += block.data.txdata.len();
+                                formatter.fmt(block);
+                            }
+                            drop(formatter);
+                            Ok(())
+                        },
+                        |duration, _| trace!("Formatted queries in {}s", duration.as_secs()),
+                    )?;
 
-                    let max_block_height = blocks.iter().rev().next().expect("at least one block").height;
+                    let max_block_height = blocks
+                        .iter()
+                        .rev()
+                        .next()
+                        .expect("at least one block")
+                        .height;
 
                     writer_tx
                         .send((
@@ -955,7 +978,7 @@ impl InsertThread {
         });
 
         let writer_thread = std::thread::spawn({
-              let url = url.clone();
+            let url = url.clone();
             let conn = establish_connection(&url)?;
             fn_log_err("pg_writer", move || {
                 let mut prev_time = std::time::Instant::now();
@@ -1090,10 +1113,7 @@ impl Postresql {
         hash_id: &[u8],
     ) -> Result<Option<bool>> {
         Ok(conn
-            .query(
-                "SELECT extinct FROM block WHERE hash_id = $1",
-                &[&hash_id],
-            )?
+            .query("SELECT extinct FROM block WHERE hash_id = $1", &[&hash_id])?
             .iter()
             .next()
             .map(|row| row.get::<_, bool>(0)))
@@ -1190,7 +1210,8 @@ impl Postresql {
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
         // TODO: This `unwrap` is not OK. Connecting to db can fail.
-        self.pipeline = Some(InsertThread::new(self.url.clone(), self.in_flight.clone(), self.mode).unwrap())
+        self.pipeline =
+            Some(InsertThread::new(self.url.clone(), self.in_flight.clone(), self.mode).unwrap())
     }
 
     fn flush_workers(&mut self) -> Result<()> {
@@ -1299,12 +1320,14 @@ impl Postresql {
         debug_assert!(!self.are_workers_stopped());
         debug_assert!(self.pending_reorg.is_empty());
 
+        /*
         trace!(
             "Inserting at tip block {}H {} when chain_block_count = {}",
             block.height,
             block.id,
             self.chain_block_count
         );
+        */
 
         // if we extend, we can't make holes
         assert!(block.height <= self.chain_block_count);
@@ -1322,7 +1345,7 @@ impl Postresql {
             if db_hash == block.id {
                 // we already have exact same block, non-extinct, and we don't want
                 // to add it twice
-                trace!("Alredy included block {}H {}", block.height, block.id);
+                trace!("Already included block {}H {}", block.height, block.id);
                 self.start_workers();
 
                 return Ok(());
@@ -1439,9 +1462,10 @@ impl Postresql {
             let block_hash_id = hash_to_hash_id(&block.id);
 
             match Self::read_db_block_extinct_by_hash_id_trans(&transaction, &block_hash_id)? {
-                Some(false) => {
-                    panic!("Why is block id={} not extinct?", hex::encode(block_hash_id))
-                }
+                Some(false) => panic!(
+                    "Why is block id={} not extinct?",
+                    hex::encode(block_hash_id)
+                ),
                 Some(true) => {
                     trace!(
                         "Existing reorg block: reviving {}H {}",

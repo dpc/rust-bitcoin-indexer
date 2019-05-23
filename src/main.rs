@@ -9,10 +9,9 @@ use bitcoin_indexer::{
     util::BottleCheck,
     RpcInfo,
 };
-use std::env;
 use bitcoincore_rpc::RpcApi;
 use log::info;
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use common_failures::{prelude::*, quick_main};
 
@@ -25,7 +24,6 @@ struct Indexer {
 
 impl Indexer {
     fn new(config: Config) -> Result<Self> {
-
         let rpc_info = bitcoin_indexer::RpcInfo::from_url(&config.node_url)?;
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
@@ -92,7 +90,7 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self> {
-        Ok  (Self {
+        Ok(Self {
             db_url: env::var("DATABASE_URL")?,
             node_url: env::var("NODE_RPC_URL")?,
         })
@@ -111,7 +109,6 @@ fn run() -> Result<()> {
         db::pg::Postresql::wipe(&env::var("DATABASE_URL")?)?;
         return Ok(());
     }
-
 
     if let Some(height) = opts.wipe_to_height {
         let mut indexer = Indexer::new(config)?;
