@@ -193,7 +193,7 @@ where
         debug_assert_eq!(block.block.height, self.cur_height);
         if self.cur_height > 0 {
             if let Some(stored_prev_id) = self.prev_hashes.get(&(self.cur_height - 1)) {
-                debug!(
+                trace!(
                     "Reorg check: last_id {} =? current {} at {}H",
                     stored_prev_id,
                     block.prev_block_id,

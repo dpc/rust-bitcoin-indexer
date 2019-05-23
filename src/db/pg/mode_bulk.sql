@@ -43,7 +43,7 @@ BEGIN
     ALTER TABLE input DROP CONSTRAINT input_pkey;
   END IF;
 END $$;
-DROP INDEX IF EXISTS input_output_hash_id;
+DROP INDEX IF EXISTS input_tx_hash_id;
 
 -- disable autovacum: we don't delete data anyway
 ALTER TABLE event SET (
