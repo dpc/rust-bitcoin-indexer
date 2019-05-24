@@ -14,14 +14,14 @@ use std::{
     time::Instant,
 };
 
-pub fn establish_connection(url: &str) -> Result<Connection> {
+pub fn establish_connection(url: &str) -> Connection {
     loop {
         match Connection::connect(url, TlsMode::None) {
             Err(e) => {
                 eprintln!("Error connecting to PG: {}", e);
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
-            Ok(o) => return Ok(o),
+            Ok(o) => return o,
         }
     }
 }
@@ -82,148 +82,10 @@ fn hash_id_and_rest_to_hash(id_and_rest: (Vec<u8>, Vec<u8>)) -> BlockHash {
 
     BlockHash::from_slice(&id).expect("a valid hash")
 }
-/*
-fn get_hash_vec(mut val: Vec<u8>) -> BlockHash {
-    val.reverse();
-    BlockHash::from_slice(val.as_slice()).expect("correct hash")
-}
-
-fn hash_to_db_vec(hash: &BlockHash) -> Vec<u8> {
-    let mut v = std::borrow::Borrow::<[u8]>::borrow(hash).to_owned();
-    v.reverse();
-    v
-}*/
 
 const SQL_INSERT_VALUES_SIZE: usize = 9000;
 const SQL_HASH_ID_SIZE: usize = 16;
-// const SQL_HASH_REST_SIZE : usize = 32 - SQL_HASH_ID_SIZE;
 
-/*
-fn get_hash_from_id_and_rest(row: &postgres::rows::Row, index_first: usize) -> BlockHash {
-    let hash_id = row.get::<_, Vec<u8>>(index_first);
-    let hash_rest = row.get::<_, Vec<u8>>(index_first + 1);
-    hash_id_and_rest_to_hash((hash_id, hash_rest))
-}
-*/
-
-/*
-fn get_hash(row: &postgres::rows::Row, index: usize) -> BlockHash {
-    let mut human_bytes = row.get::<_, Vec<u8>>(index);
-    human_bytes.reverse();
-    BlockHash::from_slice(human_bytes.as_slice()).expect("correct hash")
-}
-*/
-
-/*
-fn fmt_bulk_insert_events_sql(s: &mut String, blocks: impl Iterator<Item=&db::Block>, mode: Mode) {
-    for chunk in blocks.chunks(SQL_INSERT_VALUES_SIZE) {
-       s.write_str("INSERT INTO event (block_hash_id) VALUES".into();
-        for (i, block) in chunk.enumerate() {
-            if i > 0 {
-                s.write_str(",").unwrap();
-            }
-
-            s.write_str("(\\x").unwrap();
-            write_hash_id_hex(s, &block.hash).unwrap();
-            s.write_str(")").unwrap();
-        }
-        if !mode.is_bulk() {
-            s.write_str("ON CONFLICT DO NOTHING").unwrap();
-        }
-        s.write_str(";").unwrap();
-    }
-}
-
-fn fmt_bulk_insert_blocks_sql(s: &mut String, blocks: impl Iterator<Item=&db::Block>, mode: Mode) {
-    for chunk in blocks.chunks(SQL_INSERT_VALUES_SIZE) {
-        s.write_str("INSERT INTO block (hash_id, hash_rest, prev_hash_id, merkle_root, height, time) VALUES").unwrap();
-        for (i, block) in chunk.enumerate() {
-            if i > 0 {
-                s.write_str(",").unwrap();
-            }
-
-            s.write_str("(\\x").unwrap();
-            write_hash_id_hex(s, &block.hash).unwrap();
-
-            s.write_str(",\\x").unwrap();
-            write_hash_rest_hex(s, &block.hash).unwrap();
-
-            s.write_str(",\\x").unwrap();
-            write_hash_id_hex(s, &block.prev_hash).unwrap();
-
-            s.write_str(",\\x").unwrap();
-            write_hash_hex(s, &block.merkle_root).unwrap();
-
-            s.write_fmt(format_args!(
-                "{},{})",
-                block.height, block.time
-            ))
-            .unwrap();
-        }
-        if !mode.is_bulk() {
-            s.write_str("ON CONFLICT DO NOTHING").unwrap();
-        }
-        s.write_str(";").unwrap();
-    }
-}
-
-fn fmt_bulk_insert_txs_sql(s: &mut String, txs: impl Iterator<Item=&db::Txs>, mode: Mode) {
-    for chunk in blocks.chunks(SQL_INSERT_VALUES_SIZE) {
-        s.write_str("INSERT INTO tx (hash_id, hash_rest, weight, fee, coinbase) VALUES").unwrap();
-
-        for (i, tx) in chunk.enumerate() {
-            if i > 0 {
-                s.write_str(",").unwrap();
-            }
-
-            s.write_str("(\\x").unwrap();
-            write_hash_id_hex(s, &tx.hash).unwrap();
-
-            s.write_str(",\\x").unwrap();
-            write_hash_rest_hex(s, &tx.hash).unwrap();
-
-            s.write_fmt(format_args!(
-                "{},{},{})",
-                tx.weight,
-                tx.fee,
-                tx.coinbase
-            ))
-            .unwrap();
-        }
-        if !mode.is_bulk() {
-            s.write_str("ON CONFLICT DO NOTHING").unwrap();
-        }
-        s.write_str(";").unwrap();
-    }
-}
-
-fn fmt_bulk_insert_block_txs_sql(s: &mut String, blocks: impl Iterator<Item=&db::Block>, mode: Mode) {
-
-    for chunk in blocks.chunks(SQL_INSERT_VALUES_SIZE) {
-        s.write_str("INSERT INTO block_tx (block_hash_id, tx_hash_id) VALUES").unwrap();
-        let mut i = 0;
-
-        for block in chunk.enumerate() {
-            for tx in block.txs {
-                if i > 0 {
-                    s.write_str(",").unwrap();
-                }
-                i += 1;
-
-                s.write_str("(\\x").unwrap();
-                write_hash_id_hex(s, &block.hash).unwrap();
-
-                s.write_str(",\\x)").unwrap();
-                write_hash_rest_hex(s, &tx.hash).unwrap();
-            }
-        }
-        if !mode.is_bulk() {
-            s.write_str("ON CONFLICT DO NOTHING").unwrap();
-        }
-        s.write_str(";").unwrap();
-    }
-}
-*/
 
 struct SqlFormatter<'a> {
     out: &'a mut String,
@@ -847,7 +709,7 @@ impl fmt::Display for Mode {
 type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
 
 impl InsertThread {
-    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Result<Self> {
+    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Self {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -862,7 +724,7 @@ impl InsertThread {
 
         let utxo_fetching_thread = std::thread::spawn({
             let url = url.clone();
-            let conn = establish_connection(&url)?;
+            let conn = establish_connection(&url);
             fn_log_err("pg_utxo_fetching", move || {
                 let mut utxo_set_cache = UtxoSetCache::default();
 
@@ -992,7 +854,7 @@ impl InsertThread {
 
         let writer_thread = std::thread::spawn({
             let url = url.clone();
-            let conn = establish_connection(&url)?;
+            let conn = establish_connection(&url);
             fn_log_err("pg_writer", move || {
                 let mut prev_time = std::time::Instant::now();
                 while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) =
@@ -1033,12 +895,12 @@ impl InsertThread {
             })
         });
 
-        Ok(InsertThread {
+        InsertThread {
             tx: Some(utxo_fetching_tx),
             utxo_fetching_thread: Some(utxo_fetching_thread),
             query_fmt_thread: Some(query_fmt_thread),
             writer_thread: Some(writer_thread),
-        })
+        }
     }
 }
 
@@ -1090,7 +952,7 @@ impl Drop for Postresql {
 
 impl Postresql {
     pub fn new(url: String, node_chain_head_height: BlockHeight) -> Result<Self> {
-        let connection = establish_connection(&url)?;
+        let connection = establish_connection(&url);
         Self::init(&connection)?;
         let mode = Self::read_indexer_state(&connection)?;
         let chain_block_count = Self::read_db_chain_block_count(&connection)?;
@@ -1222,9 +1084,8 @@ impl Postresql {
 
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
-        // TODO: This `unwrap` is not OK. Connecting to db can fail.
         self.pipeline =
-            Some(InsertThread::new(self.url.clone(), self.in_flight.clone(), self.mode).unwrap())
+            Some(InsertThread::new(self.url.clone(), self.in_flight.clone(), self.mode))
     }
 
     fn flush_workers(&mut self) -> Result<()> {
@@ -1277,7 +1138,7 @@ impl Postresql {
 
     pub fn wipe(url: &str) -> Result<()> {
         info!("Wiping db schema");
-        let connection = establish_connection(&url)?;
+        let connection = establish_connection(&url);
         connection.batch_execute(include_str!("pg/wipe.sql"))?;
         Ok(())
     }
@@ -1650,11 +1511,10 @@ impl DataStore for Postresql {
     }
 }
 
-/* TODO
 impl crate::event_source::EventSource for postgres::Connection {
     type Cursor = i64;
     type Id = BlockHash;
-    type Data = ();
+    type Data = bool;
 
     fn next(
         &mut self,
@@ -1663,51 +1523,30 @@ impl crate::event_source::EventSource for postgres::Connection {
     ) -> Result<(Vec<Block<Self::Id, Self::Data>>, Self::Cursor)> {
         let cursor = cursor.unwrap_or(-1);
         let rows = self.query(
-            "SELECT hash, height FROM block WHERE block.id > $1 ORDER BY id ASC LIMIT $2;",
+            "SELECT id, hash_id, hash_rest, height, revert FROM event JOIN block ON event.block_hash_id = block.hash_id WHERE event.id > $1 ORDER BY id ASC LIMIT $2;",
             &[&cursor, &(limit as i64)],
         )?;
 
         let mut res = vec![];
-        let mut prev_height = None;
-        let mut last = None;
+        let mut last = cursor;
 
         for row in &rows {
             let id: i64 = row.get(0);
-            let hash = get_hash(&row, 1);
-            let height: i64 = row.get(2);
-            if prev_height
-                .map(|prev_height| height <= prev_height)
-                .unwrap_or(true)
-            {
-                let extinct = self.query(
-                    r#"SELECT id, hash, height
-                    FROM block
-                    WHERE block.id < $1 AND
-                      block.id > (SELECT MAX(id) FROM block WHERE height < $2 AND id < $1)
-                    ORDER BY id DESC;"#,
-                    &[&id, &height],
-                )?;
-                for row in &extinct {
-                    let _id: i64 = row.get(0);
-                    let hash = get_hash(&row, 1);
-                    let height: i64 = row.get(2);
-                    res.push(Block {
-                        height: height as u64,
-                        id: hash,
-                        data: (),
-                    });
-                }
-            }
+            let hash_id: Vec<u8> = row.get(1);
+            let hash_rest: Vec<u8> = row.get(2);
+            let hash = hash_id_and_rest_to_hash((hash_id, hash_rest));
+            let height: i64 = row.get(3);
+            let revert: bool = row.get(4);
+
             res.push(Block {
-                height: height as u64,
                 id: hash,
-                data: (),
+                height: height as u64,
+                data: revert,
             });
 
-            prev_height = Some(height);
-            last = Some(id);
+            last = id;
         }
 
-        Ok((res, last.unwrap_or(cursor)))
+        Ok((res, last))
     }
-}*/
+}

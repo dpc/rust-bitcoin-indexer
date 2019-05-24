@@ -11,7 +11,7 @@ fn run() -> Result<()> {
     let node_url = env::var("NODE_RPC_URL")?;
 
     let rpc_info = bitcoin_indexer::RpcInfo::from_url(&node_url)?;
-    let db = db::pg::establish_connection(&db_url)?;
+    let db = db::pg::establish_connection(&db_url);
     db.execute(
         "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS merkle_root BYTEA",
         &[],
