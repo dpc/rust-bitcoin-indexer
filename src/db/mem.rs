@@ -1,7 +1,5 @@
-use super::*;
-use crate::{db, BlockCore, BlockHash, BlockHeight};
-use common_failures::prelude::*;
 
+/* TODO: FIXME
 #[derive(Default)]
 pub struct MemDataStore {
     blocks: BTreeMap<BlockHeight, db::Block>,
@@ -27,3 +25,4 @@ impl DataStore for MemDataStore {
         Ok(self.blocks.keys().next_back().cloned())
     }
 }
+*/

@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS input (
 -- when was this tx first seen in the mempool
 CREATE TABLE IF NOT EXISTS mempool (
   tx_hash_id BYTEA NOT NULL,
-  ts TIMESTAMPZ NOT NULL
+  ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now()))
 );
 
 
