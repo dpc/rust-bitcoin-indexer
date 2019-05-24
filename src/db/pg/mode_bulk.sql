@@ -1,3 +1,8 @@
+-- bulk mode schema: this switches schema to bulk mode
+-- mostly drops all the indices that we don't really need
+-- to optimize the performance
+
+
 DROP INDEX IF EXISTS block_extinct;
 
 DO $$
@@ -22,7 +27,7 @@ BEGIN
 END $$;
 DROP INDEX IF EXISTS block_tx_tx_hash_id_block_hash_id;
 
--- in bulk mode, the cache starts empty, so we need to be
+-- in bulk mode, the utxo cache starts empty, so we need to be
 -- able to fetch outputs by key
 DO $$
 BEGIN
@@ -61,6 +66,7 @@ ALTER TABLE tx SET (
 ALTER TABLE block_tx SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
+
 ALTER TABLE output SET (
   autovacuum_enabled = false, toast.autovacuum_enabled = false
 );

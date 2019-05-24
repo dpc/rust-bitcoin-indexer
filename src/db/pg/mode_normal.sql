@@ -1,3 +1,5 @@
+-- normal mode schema: after reaching chainhead/first reorg
+-- we build all indices, etc. to enable all the queries etc.
 CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
 
 DO $$
