@@ -1493,22 +1493,6 @@ impl DataStore for Postresql {
 
         Ok(())
     }
-
-    fn wipe_to_height(&mut self, height: u64) -> Result<()> {
-        info!("Deleting data above {}H", height);
-        let transaction = self.connection.transaction()?;
-        info!("Deleting blocks above {}H", height);
-        transaction.execute("DELETE FROM block WHERE height > $1", &[&(height as i64)])?;
-        info!("Deleting txs above {}H", height);
-        transaction.execute("DELETE FROM tx WHERE id IN (SELECT tx.id FROM tx LEFT JOIN block ON tx.block_id = block.id WHERE block.id IS NULL)", &[])?;
-        info!("Deleting outputs above {}H", height);
-        transaction.execute("DELETE FROM output WHERE id IN (SELECT output.id FROM output LEFT JOIN tx ON output.tx_id = tx.id WHERE tx.id IS NULL)", &[])?;
-        info!("Deleting inputs above {}H", height);
-        transaction.execute("DELETE FROM input WHERE output_id IN (SELECT input.output_id FROM input LEFT JOIN tx ON input.tx_id = tx.id WHERE tx.id IS NULL)", &[])?;
-        transaction.commit()?;
-        trace!("Deleted data above {}H", height);
-        Ok(())
-    }
 }
 
 impl crate::event_source::EventSource for postgres::Connection {

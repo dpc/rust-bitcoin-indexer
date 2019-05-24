@@ -110,13 +110,8 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(height) = opts.wipe_to_height {
-        let mut indexer = Indexer::new(config)?;
-        indexer.db.wipe_to_height(height)?;
-    } else {
-        let mut indexer = Indexer::new(config)?;
-        indexer.run()?;
-    }
+    let mut indexer = Indexer::new(config)?;
+    indexer.run()?;
 
     Ok(())
 }

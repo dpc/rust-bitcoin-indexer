@@ -5,8 +5,6 @@ use crate::{prelude::*, types::*, TxHash};
 use std::collections::BTreeMap;
 
 pub trait DataStore {
-    fn wipe_to_height(&mut self, height: u64) -> Result<()>;
-
     /// Get the height of the stored chainhead
     fn get_head_height(&mut self) -> Result<Option<BlockHeight>>;
 

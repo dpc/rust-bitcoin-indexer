@@ -24,6 +24,7 @@ Goals:
 Read [How to interact with a blockchain](https://dpc.pw/rust-bitcoin-indexer-how-to-interact-with-a-blockchain) for knowledge sharing, discoveries and design-decisions.
 
 Status:
+
 * The codebase is very simple, design quite clean and composable and performance really good.
 * Some tests are there and everything seems quite robust, but not tested in production so far. 
 
@@ -112,6 +113,14 @@ Tune your system for best performance too:
 Possibly ask an experienced db admin if anything more can be done. We're talking
 about inserting around billion records into 3 tables each.
 
+For reference -  on my system, I get around 30k txs indexed per second:
+
+```
+[2019-05-24T05:20:29Z INFO  bitcoin_indexer::db::pg] Block 194369H fully indexed and commited; 99block/s; 30231tx/s
+```
+
+which leads to around 5h initial blockchain indexing time (current block height is around 577k)
+
 ### Run
 
 Now everything should be ready. Compile and run with:
@@ -127,7 +136,7 @@ in a directory containing the `.env` file.
 
 #### More options
 
-You can use `--wipe-to-height` to wipe history at a point, or `--wipe-whole-db` to wipe the db.
+You can use `--wipe-whole-db` to wipe the db. (to be removed in the future)
 
 For logging set env. var. `RUST_LOG` to `rust_bitcoin=info` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
 
