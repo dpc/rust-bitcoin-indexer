@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS event (
 CREATE TABLE IF NOT EXISTS block (
   hash_id BYTEA NOT NULL UNIQUE PRIMARY KEY, -- the hash is split in two to save when referencing in other columns
   hash_rest BYTEA NOT NULL,
-  height BIGINT NOT NULL,
+  height INT NOT NULL,
   prev_hash_id BYTEA NOT NULL,
   merkle_root BYTEA NOT NULL,
   time BIGINT NOT NULL,
@@ -37,8 +37,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height)
 CREATE TABLE IF NOT EXISTS tx (
   hash_id BYTEA NOT NULL,
   hash_rest BYTEA NOT NULL,
-  weight BIGINT NOT NULL,
+  size INT NOT NULL,
+  weight INT NOT NULL,
   fee BIGINT NOT NULL,
+  locktime BIGINT NOT NULL,
   coinbase BOOLEAN NOT NULL
 );
 
@@ -62,7 +64,8 @@ CREATE TABLE IF NOT EXISTS output (
 CREATE TABLE IF NOT EXISTS input (
   output_tx_hash_id BYTEA NOT NULL, -- output id this tx input spends
   output_tx_idx INT NOT NULL,
-  tx_hash_id BYTEA NOT NULL -- tx id this input is from
+  tx_hash_id BYTEA NOT NULL, -- tx id this input is from
+  has_witness BOOLEAN NOT NULL
 );
 
 -- mempool: insert only

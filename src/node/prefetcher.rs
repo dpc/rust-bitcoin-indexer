@@ -37,12 +37,12 @@ impl Rpc for bitcoincore_rpc::Client {
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 2000;
     const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 100;
 
-    fn get_block_count(&self) -> Result<u64> {
-        Ok(RpcApi::get_block_count(self)?)
+    fn get_block_count(&self) -> Result<BlockHeight> {
+        Ok(RpcApi::get_block_count(self)? as u32)
     }
 
     fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {
-        match self.get_block_hash(height) {
+        match self.get_block_hash(height as u64) {
             Err(e) => {
                 if e.to_string().contains("Block height out of range") {
                     Ok(None)
@@ -113,7 +113,7 @@ where
     workers_finish: Arc<AtomicBool>,
     thread_num: usize,
     rpc: Arc<R>,
-    end_of_fast_sync: u64,
+    end_of_fast_sync: BlockHeight,
 }
 
 impl<R> Prefetcher<R>
@@ -382,7 +382,7 @@ where
                                 .get_min_height_in_progress()
                                 .expect("at least current height");
                         std::thread::sleep(Duration::from_millis(
-                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * ahead_minimum,
+                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * ahead_minimum as u64,
                         ));
                         retry_count += 1;
                         if retry_count % 10 == 0 {
@@ -404,7 +404,7 @@ where
     }
 
     fn get_height_to_fetch(&self) -> BlockHeight {
-        let height = self.next_height.fetch_add(1, Ordering::SeqCst) as u64;
+        let height = self.next_height.fetch_add(1, Ordering::SeqCst) as BlockHeight;
         self.in_progress
             .lock()
             .expect("unlock works")

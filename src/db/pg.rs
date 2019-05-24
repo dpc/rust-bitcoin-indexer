@@ -182,7 +182,7 @@ impl<'a> InputFormatter<'a> {
         Self {
             input: SqlFormatter::new(
                 input_s,
-                "INSERT INTO input(output_tx_hash_id, output_tx_idx, tx_hash_id)VALUES",
+                "INSERT INTO input(output_tx_hash_id,output_tx_idx,tx_hash_id,has_witness)VALUES",
                 mode,
             ),
         }
@@ -195,7 +195,8 @@ impl<'a> InputFormatter<'a> {
             s.write_fmt(format_args!("'::bytea,{},'\\x", input.previous_output.vout))
                 .unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
-            s.write_str("'::bytea)").unwrap();
+            s.write_fmt(format_args!("'::bytea,{})", !input.witness.is_empty()))
+                .unwrap();
         });
     }
 }
@@ -229,7 +230,7 @@ impl<'a> TxFormatter<'a> {
             ),
             tx: SqlFormatter::new(
                 tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, weight, fee, coinbase) VALUES",
+                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase) VALUES",
                 mode,
             ),
             output_fmt: OutputFormatter::new(output_s, mode),
@@ -260,11 +261,15 @@ impl<'a> TxFormatter<'a> {
 
             s.write_str("'::bytea,'\\x").unwrap();
             write_hash_rest_hex(s, &tx_id).unwrap();
+            let weight = tx.get_weight();
 
             s.write_fmt(format_args!(
-                "'::bytea,{},{},{})",
-                tx.get_weight(),
+                "'::bytea,{},{},{},{},{})",
+                /* TODO: https://github.com/rust-bitcoin/rust-bitcoin/issues/266 */
+                weight / 4,
+                weight,
                 fee,
+                tx.lock_time,
                 tx.is_coin_base()
             ))
             .unwrap();
@@ -720,7 +725,7 @@ impl InsertThread {
         let (query_fmt_tx, query_fmt_rx) =
             crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap)>(0);
         let (writer_tx, writer_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<String>, HashSet<BlockHash>, u64, usize)>(0);
+            crossbeam_channel::bounded::<(u64, Vec<String>, HashSet<BlockHash>, BlockHeight, usize)>(0);
 
         let utxo_fetching_thread = std::thread::spawn({
             let url = url.clone();
@@ -995,19 +1000,19 @@ impl Postresql {
     }
 
     fn read_db_chain_current_block_count(conn: &Connection) -> Result<BlockHeight> {
-        Ok(query_one_value_opt::<i64>(
+        Ok(query_one_value_opt::<i32>(
             conn,
             "SELECT max(height) FROM block WHERE extinct = FALSE",
             &[],
         )?
-        .map(|i| i as u64 + 1)
+        .map(|i| i as u32 + 1)
         .unwrap_or(0))
     }
 
     fn read_db_chain_block_count(conn: &Connection) -> Result<BlockHeight> {
         Ok(
-            query_one_value_opt::<i64>(conn, "SELECT max(height) FROM block", &[])?
-                .map(|i| i as u64 + 1)
+            query_one_value_opt::<i32>(conn, "SELECT max(height) FROM block", &[])?
+                .map(|i| i as u32 + 1)
                 .unwrap_or(0),
         )
     }
@@ -1519,12 +1524,12 @@ impl crate::event_source::EventSource for postgres::Connection {
             let hash_id: Vec<u8> = row.get(1);
             let hash_rest: Vec<u8> = row.get(2);
             let hash = hash_id_and_rest_to_hash((hash_id, hash_rest));
-            let height: i64 = row.get(3);
+            let height: i32 = row.get(3);
             let revert: bool = row.get(4);
 
             res.push(Block {
                 id: hash,
-                height: height as u64,
+                height: height as BlockHeight,
                 data: revert,
             });
 

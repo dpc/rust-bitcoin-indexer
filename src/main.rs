@@ -16,7 +16,7 @@ use std::{env, sync::Arc};
 use common_failures::{prelude::*, quick_main};
 
 struct Indexer {
-    node_starting_chainhead_height: u64,
+    node_starting_chainhead_height: BlockHeight,
     rpc: Arc<bitcoincore_rpc::Client>,
     db: Box<dyn db::DataStore>,
     bottlecheck_db: BottleCheck,
@@ -27,7 +27,7 @@ impl Indexer {
         let rpc_info = bitcoin_indexer::RpcInfo::from_url(&config.node_url)?;
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
-        let node_starting_chainhead_height = rpc.get_block_count()?;
+        let node_starting_chainhead_height = rpc.get_block_count()? as BlockHeight;
         let mut db = db::pg::Postresql::new(config.db_url, node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 

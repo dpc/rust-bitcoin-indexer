@@ -164,11 +164,11 @@ impl Rpc for TestRpc {
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 0;
     const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 0;
 
-    fn get_block_count(&self) -> Result<u64> {
+    fn get_block_count(&self) -> Result<BlockHeight> {
         self.maybe_change_state();
 
         let inner = self.inner.lock().unwrap();
-        Ok(inner.chain.len().saturating_sub(1) as u64)
+        Ok(inner.chain.len().saturating_sub(1) as BlockHeight)
     }
 
     fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {
@@ -239,12 +239,12 @@ fn prefetcher_reorg_reliability(start: Option<u8>, mut reorgs_seed: Vec<(u8, u8,
 
     let window_size = pending_reorgs_on_start
         .iter()
-        .fold(0u64, |sum, reorg| sum + u64::from(reorg.depth));
+        .fold(0, |sum, reorg| sum + BlockHeight::from(reorg.depth));
 
     debug!("starting chain: {:?}", chain);
 
     let start = start.map(|start| {
-        let prefetcher_starting_height = u64::from(start).saturating_sub(window_size);
+        let prefetcher_starting_height = BlockHeight::from(start).saturating_sub(window_size);
         let prefetcher_starting_id = rpc
             .get_block_id_by_height(prefetcher_starting_height)
             .unwrap()

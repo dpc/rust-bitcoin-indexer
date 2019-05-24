@@ -13,7 +13,7 @@ pub struct Fetcher<R>
 where
     R: Rpc,
 {
-    cached_node_block_count: Option<u64>,
+    cached_node_block_count: Option<u32>,
     prefetcher: prefetcher::Prefetcher<R>,
     rpc: Arc<R>,
     ended: bool,

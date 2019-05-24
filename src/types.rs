@@ -17,7 +17,7 @@ pub struct Block<H, D = ()> {
     pub data: D,
 }
 
-pub type BlockHeight = u64;
+pub type BlockHeight = u32;
 pub type BlockHash = Sha256dHash;
 pub struct BlockHeightAndHash {
     pub height: BlockHeight,

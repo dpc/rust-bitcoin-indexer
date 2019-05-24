@@ -28,7 +28,7 @@ pub trait Rpc: Send + Sync {
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64;
     const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64;
 
-    fn get_block_count(&self) -> Result<u64>;
+    fn get_block_count(&self) -> Result<BlockHeight>;
 
     fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>>;
 
