@@ -1451,7 +1451,7 @@ impl Postresql {
         trace!("Reorg begining at {}H", first_different_height);
 
         transaction.execute(
-            "INSERT INTO event (block_hash_id, revert) SELECT block_hash_id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
+            "INSERT INTO event (block_hash_id, revert) SELECT hash_id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
             &[&(first_different_height as i64)],
         )?;
         transaction.execute(
@@ -1484,7 +1484,7 @@ impl Postresql {
                         block.id
                     );
                     transaction.execute(
-                        "UPDATE block SET extinct = false WHERE block_hash_id = $1;",
+                        "UPDATE block SET extinct = false WHERE hash_id = $1;",
                         &[&(block_hash_id)],
                     )?;
                     transaction.execute(
