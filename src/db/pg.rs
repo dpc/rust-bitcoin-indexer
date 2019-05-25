@@ -14,6 +14,8 @@ use std::{
     time::Instant,
 };
 
+type BlockHeightSigned = i32;
+
 pub fn establish_connection(url: &str) -> Connection {
     loop {
         match Connection::connect(url, TlsMode::None) {
@@ -389,78 +391,6 @@ impl<'a> BlockFormatter<'a> {
     }
 }
 
-/*
-
-fn create_bulk_insert_outputs_query(
-    outputs: &[Output],
-    tx_ids: &HashMap<TxHash, i64>,
-) -> Vec<String> {
-    if outputs.is_empty() {
-        return vec![];
-    }
-    if outputs.len() > 9000 {
-        let mid = outputs.len() / 2;
-        let mut p1 = create_bulk_insert_outputs_query(&outputs[0..mid], tx_ids);
-        let mut p2 = create_bulk_insert_outputs_query(&outputs[mid..outputs.len()], tx_ids);
-        p1.append(&mut p2);
-        return p1;
-    }
-
-    let mut q: String =
-        "INSERT INTO output (tx_id, tx_idx, value, address, coinbase) VALUES ".into();
-    for (i, output) in outputs.iter().enumerate() {
-        if i > 0 {
-            q.push_str(",")
-        }
-        q.write_fmt(format_args!(
-            "({},{},{},{},{})",
-            tx_ids[&output.out_point.txid],
-            output.out_point.vout,
-            output.value,
-            output
-                .address
-                .as_ref()
-                .map_or("null".into(), |s| format!("'{}'", s)),
-            output.coinbase,
-        ))
-        .unwrap();
-    }
-    q.write_str(";").expect("Write to string can't fail");
-    return vec![q];
-}
-
-fn create_bulk_insert_inputs_query(
-    inputs: &[Input],
-    outputs: &HashMap<OutPoint, UtxoSetEntry>,
-    tx_ids: &HashMap<TxHash, i64>,
-) -> Vec<String> {
-    if inputs.is_empty() {
-        return vec![];
-    }
-    if inputs.len() > 9_000 {
-        let mid = inputs.len() / 2;
-        let mut p1 = create_bulk_insert_inputs_query(&inputs[0..mid], outputs, tx_ids);
-        let mut p2 = create_bulk_insert_inputs_query(&inputs[mid..inputs.len()], outputs, tx_ids);
-        p1.append(&mut p2);
-        return p1;
-    }
-
-    let mut q: String = "INSERT INTO input (output_id, tx_id) VALUES ".into();
-    for (i, input) in inputs.iter().enumerate() {
-        if i > 0 {
-            q.push_str(",")
-        }
-        q.write_fmt(format_args!(
-            "({},{})",
-            outputs[&input.out_point].id, tx_ids[&input.tx_id]
-        ))
-        .unwrap();
-    }
-    q.write_str(";").expect("Write to string can't fail");
-    vec![q]
-}
-
-*/
 fn create_fetch_outputs_query<'a>(
     outputs: impl Iterator<Item = &'a HashIdOutPoint>,
 ) -> Vec<String> {
@@ -1000,18 +930,18 @@ impl Postresql {
     }
 
     fn read_db_chain_current_block_count(conn: &Connection) -> Result<BlockHeight> {
-        Ok(query_one_value_opt::<i32>(
+        Ok(query_one_value_opt::<BlockHeightSigned>(
             conn,
             "SELECT max(height) FROM block WHERE extinct = FALSE",
             &[],
         )?
-        .map(|i| i as u32 + 1)
+        .map(|i| i as BlockHeight + 1)
         .unwrap_or(0))
     }
 
     fn read_db_chain_block_count(conn: &Connection) -> Result<BlockHeight> {
         Ok(
-            query_one_value_opt::<i32>(conn, "SELECT max(height) FROM block", &[])?
+            query_one_value_opt::<BlockHeightSigned>(conn, "SELECT max(height) FROM block", &[])?
                 .map(|i| i as u32 + 1)
                 .unwrap_or(0),
         )
@@ -1024,7 +954,7 @@ impl Postresql {
         Ok(query_two_values::<Vec<u8>, Vec<u8>>(
             &conn,
             "SELECT hash_id, hash_rest FROM block WHERE height = $1 AND extinct = false",
-            &[&(height as i64)],
+            &[&(height as BlockHeightSigned)],
         )?
         .map(hash_id_and_rest_to_hash))
     }
@@ -1036,7 +966,7 @@ impl Postresql {
         Ok(query_two_values_trans::<Vec<u8>, Vec<u8>>(
             conn,
             "SELECT hash_id, hash_rest FROM block WHERE height = $1 AND extinct = false",
-            &[&(height as i64)],
+            &[&(height as BlockHeightSigned)],
         )?
         .map(hash_id_and_rest_to_hash))
     }
@@ -1318,11 +1248,11 @@ impl Postresql {
 
         transaction.execute(
             "INSERT INTO event (block_hash_id, revert) SELECT hash_id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
-            &[&(first_different_height as i64)],
+            &[&(first_different_height as BlockHeightSigned)],
         )?;
         transaction.execute(
             "UPDATE block SET extinct = true WHERE height >= $1;",
-            &[&(first_different_height as i64)],
+            &[&(first_different_height as BlockHeightSigned)],
         )?;
 
         self.pending_reorg = self.pending_reorg.split_off(&first_different_height);
@@ -1524,7 +1454,7 @@ impl crate::event_source::EventSource for postgres::Connection {
             let hash_id: Vec<u8> = row.get(1);
             let hash_rest: Vec<u8> = row.get(2);
             let hash = hash_id_and_rest_to_hash((hash_id, hash_rest));
-            let height: i32 = row.get(3);
+            let height: BlockHeightSigned = row.get(3);
             let revert: bool = row.get(4);
 
             res.push(Block {

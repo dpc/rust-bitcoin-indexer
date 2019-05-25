@@ -119,17 +119,15 @@ For reference -  on my system, I get around 30k txs indexed per second:
 [2019-05-24T05:20:29Z INFO  bitcoin_indexer::db::pg] Block 194369H fully indexed and commited; 99block/s; 30231tx/s
 ```
 
-which leads to around 5h initial blockchain indexing time (current block height is around 577k)
+which leads to around 5 hours initial blockchain indexing time (current block height is around 577k)...
+and then just 4 additional 4 hours to build indices.
 
 ### Run
 
 Now everything should be ready. Compile and run with:
 
 ```
-cargo build --release; \
-	and time ./target/release/bitcoin-indexer \
-	--rpc-url http://localhost:8332 \
-	--rpc-user user --rpc-pass password
+cargo build --release; ./target/release/bitcoin-indexer
 ```
 
 in a directory containing the `.env` file.

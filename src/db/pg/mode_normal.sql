@@ -79,3 +79,47 @@ ALTER TABLE input SET (
 ALTER TABLE input SET (
   autovacuum_enabled = true, toast.autovacuum_enabled = true
 );
+
+
+
+CREATE OR REPLACE VIEW address_balance AS
+  SELECT address, SUM(
+    CASE WHEN input.output_tx_hash_id IS NULL THEN value ELSE 0 END
+  ) AS value
+  FROM output
+  JOIN tx AS output_tx ON output_tx.hash_id = output.tx_hash_id
+  JOIN block_tx AS output_block_tx ON output_block_tx.tx_hash_id = output_tx.hash_id
+  JOIN block AS output_block ON output_block.hash_id = output_block_tx.block_hash_id
+  LEFT JOIN input
+    JOIN tx AS input_tx ON input_tx.hash_id = input.tx_hash_id
+    JOIN block_tx AS input_block_tx ON input_block_tx.tx_hash_id = input_tx.hash_id
+    JOIN block AS input_block ON input_block.hash_id = input_block_tx.block_hash_id
+  ON output.tx_hash_id = input.output_tx_hash_id AND input_block.extinct = false
+  WHERE
+    output_block.extinct = false
+  GROUP BY
+    output.address;
+
+CREATE OR REPLACE VIEW address_balance_at_height AS
+  SELECT address, block.height, SUM(
+    CASE WHEN output_block.height <= block.height AND input.output_tx_hash_id IS NULL THEN output.value ELSE 0 END
+  ) AS value
+  FROM block
+  JOIN output ON true
+  JOIN tx AS output_tx ON output_tx.hash_id = output.tx_hash_id
+  JOIN block_tx AS output_block_tx ON output_block_tx.tx_hash_id = output_tx.hash_id
+  JOIN block AS output_block ON output_block.hash_id = output_block_tx.block_hash_id
+  LEFT JOIN input
+    JOIN tx AS input_tx ON input_tx.hash_id = input.tx_hash_id
+    JOIN block_tx AS input_block_tx ON input_block_tx.tx_hash_id = input_tx.hash_id
+    JOIN block AS input_block ON input_block.hash_id = input_block_tx.block_hash_id
+  ON output.tx_hash_id = input.output_tx_hash_id AND
+    input_block.extinct = false AND
+    input_block.height <= block.height
+  WHERE
+    block.extinct = false AND
+    output_block.extinct = false
+  GROUP BY
+    block.height,
+    output.address
+  ORDER BY output.address;
