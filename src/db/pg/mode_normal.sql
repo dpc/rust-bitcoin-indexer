@@ -104,7 +104,7 @@ CREATE OR REPLACE VIEW tx_in_mempool AS
   select
     *
   FROM tx_maybe_with_block
-  where tx_maybe_with_block.block_hash_id IS NULL OR tx_maybe_with_block.block_extinct = true;
+  where tx_maybe_with_block.mempool_ts IS NOT NULL AND (tx_maybe_with_block.block_hash_id IS NULL OR tx_maybe_with_block.block_extinct = true);
 
 CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
@@ -147,8 +147,6 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
     block.height,
     output.address
   ORDER BY output.address;
-
-
 
 --
 -- Performance tuning
