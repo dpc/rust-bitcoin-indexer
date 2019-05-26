@@ -1,5 +1,11 @@
 -- normal mode schema: after reaching chainhead/first reorg
 -- we build all indices, etc. to enable all the queries etc.
+-- we also define some utitlity functions
+
+
+--
+-- Keys & indices
+--
 CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
 
 DO $$
@@ -55,47 +61,35 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS mempool_ts ON mempool (ts);
 
-ANALYZE block;
-ANALYZE tx;
-ANALYZE block_tx;
-ANALYZE output;
-ANALYZE input;
 
--- enableautovacum: it might be useful anyway
-ALTER TABLE event SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
+--
+-- Utilities
+--
 
-ALTER TABLE block SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
-ALTER TABLE tx SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
-ALTER TABLE block_tx SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
-ALTER TABLE output SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
-ALTER TABLE input SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
-ALTER TABLE input SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
-);
-
+-- https://stackoverflow.com/a/25137344/134409
+CREATE OR REPLACE FUNCTION reverse_bytes_iter(bytes bytea, length int, midpoint int, index int)
+RETURNS bytea AS
+$$
+  SELECT CASE WHEN index >= midpoint THEN bytes ELSE
+    reverse_bytes_iter(
+      set_byte(
+        set_byte(bytes, index, get_byte(bytes, length-index)),
+        length-index, get_byte(bytes, index)
+      ),
+      length, midpoint, index + 1
+    )
+  END;
+$$ LANGUAGE SQL IMMUTABLE;
+CREATE OR REPLACE FUNCTION reverse_bytes(bytes bytea) RETURNS bytea AS
+'SELECT reverse_bytes_iter(bytes, octet_length(bytes)-1, octet_length(bytes)/2, 0)'
+LANGUAGE SQL IMMUTABLE;
 
 -- tx joined all the way to the block
 -- NOTE: there might be from 0 (NULL data),
 -- to many blocks which happaned to include the tx (extinct blocks)
 CREATE OR REPLACE VIEW tx_maybe_with_block AS
   SELECT tx.*,
+  reverse_bytes(tx.hash_id || tx.hash_rest) AS hash,
   block.hash_id AS block_hash_id,
   block.hash_rest AS block_hash_rest,
   block.height AS block_height,
@@ -116,6 +110,7 @@ CREATE OR REPLACE VIEW tx_with_block AS
 CREATE OR REPLACE VIEW tx_in_mempool AS
   select
     tx.*,
+    reverse_bytes(tx.hash_id || tx.hash_rest) AS hash,
     mempool.ts
   FROM tx
   JOIN mempool
@@ -165,3 +160,46 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
     block.height,
     output.address
   ORDER BY output.address;
+
+
+
+--
+-- Performance tuning
+--
+
+ANALYZE block;
+ANALYZE tx;
+ANALYZE block_tx;
+ANALYZE output;
+ANALYZE input;
+ANALYZE mempool;
+
+-- enableautovacum: it might be useful anyway
+ALTER TABLE event SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE block SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE tx SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE block_tx SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE output SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE input SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
+ALTER TABLE input SET (
+  autovacuum_enabled = true, toast.autovacuum_enabled = true
+);
+
