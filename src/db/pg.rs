@@ -1531,6 +1531,7 @@ pub struct MempoolStore {
 impl MempoolStore {
     pub fn new(url: String) -> Result<Self> {
         let connection = establish_connection(&url);
+        IndexerStore::init(&connection)?;
 
         let mode = IndexerStore::read_indexer_state(&connection)?;
 
