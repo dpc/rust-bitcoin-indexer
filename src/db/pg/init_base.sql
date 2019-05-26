@@ -23,8 +23,9 @@ CREATE TABLE IF NOT EXISTS block (
   height INT NOT NULL,
   prev_hash_id BYTEA NOT NULL,
   merkle_root BYTEA NOT NULL,
-  time BIGINT NOT NULL,
-  extinct BOOLEAN NOT NULL DEFAULT FALSE -- this is the only mutable column in this table (and maybe in the whole database)
+  time BIGINT NOT NULL, -- time from the block itself
+  extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table (and maybe in the whole database)
+  indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now()))
 );
 
 -- We always want these two, as a lot of logic is based
@@ -32,6 +33,13 @@ CREATE TABLE IF NOT EXISTS block (
 -- so it doesn't matter that much (perforamnce wise)
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
 CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
+
+-- block -> tx: insert only
+-- mapping between blocks and txes they include
+CREATE TABLE IF NOT EXISTS block_tx (
+  block_hash_id BYTEA NOT NULL,
+  tx_hash_id BYTEA NOT NULL
+);
 
 -- txs: insert only
 CREATE TABLE IF NOT EXISTS tx (
@@ -41,15 +49,8 @@ CREATE TABLE IF NOT EXISTS tx (
   weight INT NOT NULL,
   fee BIGINT NOT NULL,
   locktime BIGINT NOT NULL,
-  coinbase BOOLEAN NOT NULL
-);
-
-
--- block -> tx: insert only
--- mapping between blocks and txes they include
-CREATE TABLE IF NOT EXISTS block_tx (
-  block_hash_id BYTEA NOT NULL,
-  tx_hash_id BYTEA NOT NULL
+  coinbase BOOLEAN NOT NULL,
+  mempool_ts TIMESTAMP DEFAULT NULL -- NULL if it was indexed from an indexed block
 );
 
 -- outputs: insert only
@@ -66,11 +67,4 @@ CREATE TABLE IF NOT EXISTS input (
   output_tx_idx INT NOT NULL,
   tx_hash_id BYTEA NOT NULL, -- tx id this input is from
   has_witness BOOLEAN NOT NULL
-);
-
--- mempool: insert only
--- when was this tx first seen in the mempool
-CREATE TABLE IF NOT EXISTS mempool (
-  tx_hash_id BYTEA NOT NULL,
-  ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now()))
 );

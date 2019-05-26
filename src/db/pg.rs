@@ -240,6 +240,8 @@ struct TxFormatter<'a> {
     input_fmt: InputFormatter<'a>,
 
     inputs_utxo_map: UtxoMap,
+
+    from_mempool: bool,
 }
 
 impl<'a> TxFormatter<'a> {
@@ -259,6 +261,27 @@ impl<'a> TxFormatter<'a> {
             output_fmt: OutputFormatter::new(output_s, mode),
             input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
+            from_mempool: false,
+        }
+    }
+
+    fn new_from_mempool(
+        tx_s: &'a mut String,
+        output_s: &'a mut String,
+        input_s: &'a mut String,
+        mode: Mode,
+        inputs_utxo_map: UtxoMap,
+    ) -> Self {
+        Self {
+            tx: SqlFormatter::new(
+                tx_s,
+                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, mempool_ts) VALUES",
+                mode,
+            ),
+            output_fmt: OutputFormatter::new(output_s, mode),
+            input_fmt: InputFormatter::new(input_s, mode),
+            inputs_utxo_map,
+            from_mempool: true,
         }
     }
 
@@ -268,6 +291,7 @@ impl<'a> TxFormatter<'a> {
         tx_id: &Sha256dHash,
         fee: u64,
     ) {
+        let from_mempool = self.from_mempool;
         self.tx.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
@@ -277,7 +301,7 @@ impl<'a> TxFormatter<'a> {
             let weight = tx.get_weight();
 
             s.write_fmt(format_args!(
-                "'::bytea,{},{},{},{},{})",
+                "'::bytea,{},{},{},{},{}",
                 /* TODO: https://github.com/rust-bitcoin/rust-bitcoin/issues/266 */
                 weight / 4,
                 weight,
@@ -286,6 +310,10 @@ impl<'a> TxFormatter<'a> {
                 tx.is_coin_base()
             ))
             .unwrap();
+            if from_mempool {
+                s.write_str(",timezone('utc', now())") .unwrap();
+            }
+            s.write_str(")") .unwrap();
         });
     }
 
@@ -1530,11 +1558,11 @@ impl MempoolStore {
                     let mut output_q = String::new();
                     let mut input_q = String::new();
 
-                    let mut formatter = TxFormatter::new(
+                    let mut formatter = TxFormatter::new_from_mempool(
                         &mut tx_q,
                         &mut output_q,
                         &mut input_q,
-                        Mode::Normal, // we can't be running in any othher mode
+                        Mode::Normal, // we can't be running in any other mode
                         utxo_map,
                     );
 
@@ -1561,11 +1589,6 @@ impl super::MempoolStore for MempoolStore {
     }
 
     fn insert(&mut self, tx: &WithHash<Option<bitcoin::Transaction>>) -> Result<()> {
-        self.connection.query(
-            "INSERT INTO mempool (tx_hash_id) VALUES ($1) ON CONFLICT DO NOTHING;",
-            &[&hash_to_hash_id(&tx.id)]
-        )?;
-
         let tx_id = tx.id;
 
         if let Some(ref tx) = tx.data {
