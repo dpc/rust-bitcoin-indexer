@@ -125,7 +125,7 @@ For reference -  on my system, I get around 30k txs indexed per second:
 ```
 
 which leads to around 5 hours initial blockchain indexing time (current block height is around 577k)...
-and then just 4 additional 4 hours to build indices.
+and then just 4 additional hours to build indices.
 
 ### Run
 
@@ -171,3 +171,19 @@ bitcoin-indexer=> select * from address_balances_at_height WHERE address IN ('14
  14zV5ZCqYmgyCzoVEhRVsP7SpUDVsCBz5g | 559834 | 162209091
  344tcgkKA97LpgzGtAprtqnNRDfo4VQQWT | 559834 |         0
 ```
+
+Check txes pending in the mempool:
+
+```
+bitcoin-indexer=> select * from tx_in_mempool order by (fee/weight) desc limit 5;
+              hash_id               |             hash_rest              | size | weight |  fee   | locktime | coinbase |                                hash                                |             ts
+------------------------------------+------------------------------------+------+--------+--------+----------+----------+--------------------------------------------------------------------+----------------------------
+ \x5d094cc3e4d9a1ec2d280aa9204ff8e4 | \xf0e960ddfed324880dac6e8ab54544c6 |  191 |    764 | 562871 |   577816 | f        | \xc64445b58a6eac0d8824d3fedd60e9f0e4f84f20a90a282deca1d9e4c34c095d | 2019-05-26 05:31:08.658908
+ \x5a8caef874d1cd657460f754a9ae6985 | \xcce821c1789f20b665fd6240717340b6 |  213 |    855 | 182000 |        0 | f        | \xb64073714062fd65b6209f78c121e8cc8569aea954f7607465cdd174f8ae8c5a | 2019-05-26 05:36:10.331908
+ \xab60acf5b6c7d6103e7186a9d319210b | \xdb0baedb6c49cfe748411ea8de8425a8 |  371 |   1484 | 298600 |        0 | f        | \xa82584dea81e4148e7cf496cdbae0bdb0b2119d3a986713e10d6c7b6f5ac60ab | 2019-05-26 05:30:57.902214
+ \x5b63601004575830ccde165a924b823e | \xd5085b0193da8a5c2d0d1bc579a77a06 |  339 |   1356 | 163953 |        0 | f        | \x067aa779c51b0d2d5c8ada93015b08d53e824b925a16decc305857041060635b | 2019-05-26 05:34:34.603281
+ \xaf8ce41bd3c7db9dd44fa126b5d5d386 | \x1b0a8db2986f1124c2ebba3e9cbc9251 |  112 |    450 |  53788 |        0 | f        | \x5192bc9c3ebaebc224116f98b28d0a1b86d3d5b526a14fd49ddbc7d31be48caf | 2019-05-26 05:37:46.736696
+(5 rows)
+```
+
+and many more. Refer to `./src/db/pg/*.sql` files for good overview of the schema and utilities.
