@@ -7,13 +7,13 @@ pub mod util;
 use prelude::*;
 
 pub mod types;
-pub use crate::{Block, BlockCore, BlockHeight};
+pub use crate::{WithHeightAndId, BlockData, BlockHeight};
 pub use types::*;
 
 use std::fmt::{Debug, Display};
 
 /// `Block` specialized over types from `Rpc`
-type RpcBlock<R> = Block<<R as Rpc>::Id, <R as Rpc>::Data>;
+type RpcBlock<R> = WithHeightAndId<<R as Rpc>::Id, <R as Rpc>::Data>;
 
 /// `RpcBlock` along with an Id of a previous block
 struct RpcBlockWithPrevId<R: Rpc> {

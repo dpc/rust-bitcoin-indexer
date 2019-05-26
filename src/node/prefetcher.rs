@@ -1,6 +1,6 @@
 use log::{debug, info, trace};
 
-use crate::{prelude::*, Block, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash};
+use crate::{prelude::*, WithHeightAndId, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash};
 use bitcoincore_rpc::RpcApi;
 use common_failures::prelude::*;
 use std::{
@@ -120,7 +120,7 @@ impl<R> Prefetcher<R>
 where
     R: Rpc + 'static,
 {
-    pub fn new(rpc: Arc<R>, last_block: Option<Block<R::Id>>) -> Result<Self> {
+    pub fn new(rpc: Arc<R>, last_block: Option<WithHeightAndId<R::Id>>) -> Result<Self> {
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
@@ -432,7 +432,7 @@ where
         if let Some(id) = self.rpc.get_block_id_by_height(height)? {
             Ok(self.rpc.get_block_by_id(&id)?.map(|block| {
                 (RpcBlockWithPrevId {
-                    block: Block {
+                    block: WithHeightAndId {
                         height,
                         id,
                         data: block.0,

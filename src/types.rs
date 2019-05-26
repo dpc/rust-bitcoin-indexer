@@ -11,7 +11,7 @@ pub use bitcoin::{
 /// Comes associated with height and hash of the block.
 ///
 /// `T` is type type of the data.
-pub struct Block<H, D = ()> {
+pub struct WithHeightAndId<H, D = ()> {
     pub height: BlockHeight,
     pub id: H,
     pub data: D,
@@ -26,17 +26,16 @@ pub type WithHash<T> = WithId<Sha256dHash, T>;
 
 pub type BlockHeight = u32;
 pub type BlockHash = Sha256dHash;
+
 pub struct BlockHeightAndHash {
     pub height: BlockHeight,
     pub hash: BlockHash,
 }
 
 /// Block data from BitcoinCore (`rust-bitcoin`)
-pub type BlockCore = Block<BlockHash, Box<bitcoin::blockdata::block::Block>>;
+pub type BlockData = WithHeightAndId<BlockHash, Box<bitcoin::Block>>;
 
 pub use bitcoin_hashes::{hash160::Hash as Hash160, sha256d::Hash as Sha256dHash};
 pub type BlockHex = String;
-pub type BitcoinCoreBlock = bitcoin::blockdata::block::Block;
-pub type TxHash = Sha256dHash;
 pub type TxHex = String;
-pub type OutPoint = bitcoin::blockdata::transaction::OutPoint;
+pub type TxHash = Sha256dHash;

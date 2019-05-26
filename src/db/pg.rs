@@ -2,7 +2,6 @@ use log::{debug, error, info, trace};
 
 use super::*;
 use crate::{BlockHash, BlockHeight};
-use bitcoin::blockdata;
 use hex::ToHex;
 use itertools::Itertools;
 use postgres::{Connection, TlsMode};
@@ -29,7 +28,7 @@ pub fn establish_connection(url: &str) -> Connection {
 }
 
 fn calculate_tx_id_with_workarounds(
-    block: &BlockCore,
+    block: &BlockData,
     tx: &bitcoin::blockdata::transaction::Transaction,
 ) -> Sha256dHash {
     let is_coinbase = tx.is_coin_base();
@@ -156,7 +155,7 @@ impl<'a> OutputFormatter<'a> {
         }
     }
 
-    fn fmt(&mut self, tx_id: &Sha256dHash, output: &blockdata::transaction::TxOut, vout: u32) {
+    fn fmt(&mut self, tx_id: &Sha256dHash, output: &bitcoin::TxOut, vout: u32) {
         let network = bitcoin::network::constants::Network::Bitcoin;
         self.output.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
@@ -189,7 +188,7 @@ impl<'a> InputFormatter<'a> {
         }
     }
 
-    fn fmt(&mut self, tx_id: &Sha256dHash, input: &blockdata::transaction::TxIn) {
+    fn fmt(&mut self, tx_id: &Sha256dHash, input: &bitcoin::TxIn) {
         self.input.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &input.previous_output.txid).unwrap();
@@ -222,7 +221,7 @@ impl<'a> BlockTxFormatter<'a> {
 
     fn fmt(
         &mut self,
-        block: &BlockCore,
+        block: &BlockData,
         tx_id: &Sha256dHash,
     ) {
         self.block_tx.fmt_with(move |s| {
@@ -265,7 +264,7 @@ impl<'a> TxFormatter<'a> {
 
     fn fmt_one(
         &mut self,
-        tx: &blockdata::transaction::Transaction,
+        tx: &bitcoin::Transaction,
         tx_id: &Sha256dHash,
         fee: u64,
     ) {
@@ -290,7 +289,7 @@ impl<'a> TxFormatter<'a> {
         });
     }
 
-    fn fmt(&mut self, tx: &blockdata::transaction::Transaction, tx_id: &TxHash) {
+    fn fmt(&mut self, tx: &bitcoin::Transaction, tx_id: &TxHash) {
         let is_coinbase = tx.is_coin_base();
 
         let fee = if tx.is_coin_base() {
@@ -370,7 +369,7 @@ impl<'a> BlockFormatter<'a> {
         }
     }
 
-    fn fmt_one(&mut self, block: &BlockCore) {
+    fn fmt_one(&mut self, block: &BlockData) {
         self.event.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &block.id).unwrap();
@@ -398,7 +397,7 @@ impl<'a> BlockFormatter<'a> {
         });
     }
 
-    fn fmt(&mut self, block: &BlockCore) {
+    fn fmt(&mut self, block: &BlockData) {
         self.fmt_one(block);
 
         for (tx_i, tx) in block.data.txdata.iter().enumerate() {
@@ -479,8 +478,8 @@ impl HashIdOutPoint {
     }
 }
 
-impl From<OutPoint> for HashIdOutPoint {
-    fn from(p: OutPoint) -> Self {
+impl From<bitcoin::OutPoint> for HashIdOutPoint {
+    fn from(p: bitcoin::OutPoint) -> Self {
         Self {
             tx_hash_id: hash_to_hash_id(&p.txid),
             vout: p.vout,
@@ -508,7 +507,7 @@ impl UtxoSetCache {
     /// * Vector of outputs that were missing from the set
     fn consume(
         &mut self,
-        outputs: impl Iterator<Item = OutPoint>,
+        outputs: impl Iterator<Item = bitcoin::OutPoint>,
     ) -> (UtxoMap, Vec<HashIdOutPoint>) {
         let mut found = HashMap::default();
         let mut missing = vec![];
@@ -604,7 +603,7 @@ type BlocksInFlight = HashSet<BlockHash>;
 ///
 /// Reponsible for actually inserting data into the db.
 struct AsyncInsertThread {
-    tx: Option<crossbeam_channel::Sender<(u64, Vec<crate::BlockCore>)>>,
+    tx: Option<crossbeam_channel::Sender<(u64, Vec<crate::BlockData>)>>,
     utxo_fetching_thread: Option<std::thread::JoinHandle<Result<()>>>,
     query_fmt_thread: Option<std::thread::JoinHandle<Result<()>>>,
     writer_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -678,9 +677,9 @@ impl AsyncInsertThread {
         // improve performance, and more things in flight means
         // incrased memory usage.
         let (utxo_fetching_tx, utxo_fetching_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
+            crossbeam_channel::bounded::<(u64, Vec<crate::BlockData>)>(0);
         let (query_fmt_tx, query_fmt_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap)>(0);
+            crossbeam_channel::bounded::<(u64, Vec<crate::BlockData>, UtxoMap, TxIdMap)>(0);
         let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
             u64,
             Vec<String>,
@@ -893,7 +892,7 @@ pub struct IndexerStore {
     url: String,
     connection: Connection,
     pipeline: Option<AsyncInsertThread>,
-    batch: Vec<crate::BlockCore>,
+    batch: Vec<crate::BlockData>,
     batch_txs_total: u64,
     batch_id: u64,
     mode: Mode,
@@ -908,7 +907,7 @@ pub struct IndexerStore {
     // to guarantee that the db never contains an inconsistent state
     // during the reorg, all reorg blocks are being gathered here
     // until they overtake the current `chain_block_count`
-    pending_reorg: BTreeMap<BlockHeight, BlockCore>,
+    pending_reorg: BTreeMap<BlockHeight, BlockData>,
 }
 
 impl Drop for IndexerStore {
@@ -1159,7 +1158,7 @@ impl IndexerStore {
         !self.pending_reorg.is_empty()
     }
 
-    fn insert_when_at_tip(&mut self, block: crate::BlockCore) -> Result<()> {
+    fn insert_when_at_tip(&mut self, block: crate::BlockData) -> Result<()> {
         debug_assert!(!self.is_in_reorg());
         debug_assert!(!self.are_workers_stopped());
         debug_assert!(self.pending_reorg.is_empty());
@@ -1229,7 +1228,7 @@ impl IndexerStore {
         Ok(())
     }
 
-    fn insert_when_in_reorg(&mut self, block: crate::BlockCore) -> Result<()> {
+    fn insert_when_in_reorg(&mut self, block: crate::BlockData) -> Result<()> {
         debug_assert!(self.is_in_reorg());
         debug_assert!(self.are_workers_stopped());
         debug_assert!(!self.pending_reorg.is_empty());
@@ -1454,7 +1453,7 @@ impl super::IndexerStore for IndexerStore {
         Self::read_db_block_hash_by_height(&self.connection, height)
     }
 
-    fn insert(&mut self, block: crate::BlockCore) -> Result<()> {
+    fn insert(&mut self, block: crate::BlockData) -> Result<()> {
         if self.is_in_reorg() {
             self.insert_when_in_reorg(block)?;
         } else {
@@ -1474,7 +1473,7 @@ impl crate::event_source::EventSource for postgres::Connection {
         &mut self,
         cursor: Option<Self::Cursor>,
         limit: u64,
-    ) -> Result<(Vec<Block<Self::Id, Self::Data>>, Self::Cursor)> {
+    ) -> Result<(Vec<WithHeightAndId<Self::Id, Self::Data>>, Self::Cursor)> {
         let cursor = cursor.unwrap_or(-1);
         let rows = self.query(
             "SELECT id, hash_id, hash_rest, height, revert FROM event JOIN block ON event.block_hash_id = block.hash_id WHERE event.id > $1 ORDER BY id ASC LIMIT $2;",
@@ -1492,7 +1491,7 @@ impl crate::event_source::EventSource for postgres::Connection {
             let height: BlockHeightSigned = row.get(3);
             let revert: bool = row.get(4);
 
-            res.push(Block {
+            res.push(WithHeightAndId {
                 id: hash,
                 height: height as BlockHeight,
                 data: revert,

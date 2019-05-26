@@ -1,4 +1,4 @@
-use crate::{prelude::*, Block};
+use crate::{prelude::*, WithHeightAndId};
 
 /// Block Event source...
 ///
@@ -16,5 +16,5 @@ pub trait EventSource {
         &mut self,
         cursor: Option<Self::Cursor>,
         limit: u64,
-    ) -> Result<(Vec<Block<Self::Id, Self::Data>>, Self::Cursor)>;
+    ) -> Result<(Vec<WithHeightAndId<Self::Id, Self::Data>>, Self::Cursor)>;
 }

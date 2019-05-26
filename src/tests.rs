@@ -250,7 +250,7 @@ fn prefetcher_reorg_reliability(start: Option<u8>, mut reorgs_seed: Vec<(u8, u8,
             .unwrap()
             .unwrap();
 
-        Block {
+        WithHeightAndId{
             height: prefetcher_starting_height,
             id: prefetcher_starting_id,
             data: (),
