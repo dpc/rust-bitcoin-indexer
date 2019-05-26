@@ -27,6 +27,8 @@ Status:
 
 * The codebase is very simple, design quite clean and composable and performance really good.
 * Some tests are there and everything seems quite robust, but not tested in production so far. 
+* Indexing the blockchain works
+* Indexing mempool works
 
 
 ## Running
@@ -127,8 +129,15 @@ and then just 4 additional 4 hours to build indices.
 Now everything should be ready. Compile and run with:
 
 ```
-cargo build --release; ./target/release/bitcoin-indexer
+cargo run --release --bin bitcoin-indexer
 ```
+
+After the initial full sync, you can also start mempool indexer:
+
+```
+cargo run --release --bin mempool-indexer
+```
+
 
 in a directory containing the `.env` file.
 

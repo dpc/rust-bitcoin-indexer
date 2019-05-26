@@ -1564,7 +1564,7 @@ impl super::MempoolStore for MempoolStore {
         if let Some(ref tx) = tx.data {
             let hash_id_out_points : Vec<_> = tx.input.clone().into_iter().map(|i| HashIdOutPoint::from(i.previous_output)).collect();
 
-            if let Some(utxo_map) = fetch_outputs(&self.connection, hash_id_out_points.iter()).ok() {
+            if let Ok(utxo_map) = fetch_outputs(&self.connection, hash_id_out_points.iter()) {
 
                 if utxo_map.len() != tx.input.len() {
                     bail!("Couldn't find all inputs for tx {}", tx_id);

@@ -91,6 +91,38 @@ ALTER TABLE input SET (
 );
 
 
+-- tx joined all the way to the block
+-- NOTE: there might be from 0 (NULL data),
+-- to many blocks which happaned to include the tx (extinct blocks)
+CREATE OR REPLACE VIEW tx_maybe_with_block AS
+  SELECT tx.*,
+  block.hash_id AS block_hash_id,
+  block.hash_rest AS block_hash_rest,
+  block.height AS block_height,
+  block.prev_hash_id AS block_prev_hash_id,
+  block.merkle_root AS block_merkle_root,
+  block.time AS block_time,
+  block.extinct AS block_extinct
+  FROM tx
+  LEFT JOIN block_tx
+    JOIN block ON block.hash_id = block_tx.block_hash_id
+  ON block_tx.tx_hash_id = tx.hash_id;
+
+CREATE OR REPLACE VIEW tx_with_block AS
+  SELECT * FROM tx_maybe_with_block WHERE block_hash_id IS NOT NULL;
+
+-- txes in the mempool
+-- it does ignore extinct blocks
+CREATE OR REPLACE VIEW tx_in_mempool AS
+  select
+    tx.*,
+    mempool.ts
+  FROM tx
+  JOIN mempool
+    ON tx.hash_id = mempool.tx_hash_id
+  left join tx_maybe_with_block
+    on mempool.tx_hash_id = tx_maybe_with_block.hash_id
+  where tx_maybe_with_block.block_hash_id IS NULL OR tx_maybe_with_block.block_extinct = true;
 
 CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
