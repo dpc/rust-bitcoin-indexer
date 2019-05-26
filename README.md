@@ -1,13 +1,12 @@
 # Bitcoin Indexer
 
-An experiment in indexing Bitcoin, in Rust.
+An experiment in creating a perfect Bitcoin Indexer, in Rust.
 
 Query blocks using JsonRPC, dump them into Postgres in an append-only format,
 suitable for querying, as much as event-sourcing-like handling. After reaching
 chain-head, keep indexing in real-time and handle reorgs.
 
-This started as an education experiment, but is quite useful and advanced already.
-
+This started as an educational experiment, but is quite advanced already.
 
 Goals:
 
@@ -30,6 +29,10 @@ Status:
 * Indexing the blockchain works
 * Indexing mempool works
 
+# Support
+
+If you like and/or use this project, you can pay for it by sending Bitcoin to
+[33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93](bitcoin:33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93).
 
 ## Running
 

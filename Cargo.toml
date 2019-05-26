@@ -3,6 +3,14 @@ authors = ["Dawid Ciężarkiewicz <dpc@dpc.pw>"]
 edition = "2018"
 name = "bitcoin-indexer"
 version = "0.1.0"
+description = "Powerful & Versatile Bitcoin Indexer"
+keywords = ["bitcoin", "indexer", "database", "cryptocurrency"]
+categories = []
+license = "MPL-2.0/MIT/Apache-2.0"
+documentation = "https://docs.rs/bitcoin-indexer"
+homepage = "https://github.com/rust-bitcoin-indexer/bitcoin-indexer"
+repository = "https://github.com/rust-bitcoin-indexer/bitcoin-indexer"
+readme = "README.md"
 
 [[bench]]
 harness = false
