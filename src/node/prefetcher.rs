@@ -1,6 +1,8 @@
 use log::{debug, info, trace};
 
-use crate::{prelude::*, WithHeightAndId, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash};
+use crate::{
+    prelude::*, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash, WithHeightAndId,
+};
 use bitcoincore_rpc::RpcApi;
 use common_failures::prelude::*;
 use std::{

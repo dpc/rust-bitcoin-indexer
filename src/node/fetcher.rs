@@ -2,7 +2,7 @@ use super::prefetcher;
 use crate::Rpc;
 use std::sync::Arc;
 
-use crate::{WithHeightAndId, BlockHeight};
+use crate::{BlockHeight, WithHeightAndId};
 use common_failures::prelude::*;
 
 /// Block fetcher
@@ -24,7 +24,11 @@ impl<R> Fetcher<R>
 where
     R: Rpc + Sync + 'static,
 {
-    pub fn new(rpc: Arc<R>, start: Option<WithHeightAndId<R::Id>>, end: Option<BlockHeight>) -> Result<Self>
+    pub fn new(
+        rpc: Arc<R>,
+        start: Option<WithHeightAndId<R::Id>>,
+        end: Option<BlockHeight>,
+    ) -> Result<Self>
     where
         R: Rpc,
     {

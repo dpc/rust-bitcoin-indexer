@@ -206,10 +206,7 @@ struct BlockTxFormatter<'a> {
 }
 
 impl<'a> BlockTxFormatter<'a> {
-    fn new(
-        block_tx_s: &'a mut String,
-        mode: Mode,
-    ) -> Self {
+    fn new(block_tx_s: &'a mut String, mode: Mode) -> Self {
         Self {
             block_tx: SqlFormatter::new(
                 block_tx_s,
@@ -219,11 +216,7 @@ impl<'a> BlockTxFormatter<'a> {
         }
     }
 
-    fn fmt(
-        &mut self,
-        block: &BlockData,
-        tx_id: &Sha256dHash,
-    ) {
+    fn fmt(&mut self, block: &BlockData, tx_id: &Sha256dHash) {
         self.block_tx.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &block.id).unwrap();
@@ -285,12 +278,7 @@ impl<'a> TxFormatter<'a> {
         }
     }
 
-    fn fmt_one(
-        &mut self,
-        tx: &bitcoin::Transaction,
-        tx_id: &Sha256dHash,
-        fee: u64,
-    ) {
+    fn fmt_one(&mut self, tx: &bitcoin::Transaction, tx_id: &Sha256dHash, fee: u64) {
         let from_mempool = self.from_mempool;
         self.tx.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
@@ -311,9 +299,9 @@ impl<'a> TxFormatter<'a> {
             ))
             .unwrap();
             if from_mempool {
-                s.write_str(",timezone('utc', now())") .unwrap();
+                s.write_str(",timezone('utc', now())").unwrap();
             }
-            s.write_str(")") .unwrap();
+            s.write_str(")").unwrap();
         });
     }
 
@@ -470,20 +458,20 @@ fn fetch_outputs<'a>(
     outputs: impl Iterator<Item = &'a HashIdOutPoint>,
 ) -> Result<UtxoMap> {
     let mut out = HashMap::new();
-                for q in create_fetch_outputs_query(outputs) {
-                    for row in &conn.query(&q, &[])? {
-                        out.insert(
-                            HashIdOutPoint {
-                                tx_hash_id: row.get::<_, Vec<u8>>(0),
-                                vout: row.get::<_, i32>(1) as u32,
-                            },
-                            UtxoSetEntry {
-                                value: row.get::<_, i64>(2) as u64,
-                            },
-                        );
-                    }
-                }
-                Ok(out)
+    for q in create_fetch_outputs_query(outputs) {
+        for row in &conn.query(&q, &[])? {
+            out.insert(
+                HashIdOutPoint {
+                    tx_hash_id: row.get::<_, Vec<u8>>(0),
+                    vout: row.get::<_, i32>(1) as u32,
+                },
+                UtxoSetEntry {
+                    value: row.get::<_, i64>(2) as u64,
+                },
+            );
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -870,9 +858,11 @@ impl AsyncInsertThread {
                         "Block {}H fully indexed and commited; {}block/s; {}tx/s",
                         max_block_height,
                         (block_ids.len() as u64 * 1000)
-                            / (duration.as_secs() as u64 * 1000 + u64::from(duration.subsec_millis())),
+                            / (duration.as_secs() as u64 * 1000
+                                + u64::from(duration.subsec_millis())),
                         (tx_len as u64 * 1000)
-                            / (duration.as_secs() as u64 * 1000 + u64::from(duration.subsec_millis())),
+                            / (duration.as_secs() as u64 * 1000
+                                + u64::from(duration.subsec_millis())),
                     );
 
                     let mut any_missing = false;
@@ -1542,45 +1532,50 @@ impl MempoolStore {
     pub fn new(url: String) -> Result<Self> {
         let connection = establish_connection(&url);
 
-
         let mode = IndexerStore::read_indexer_state(&connection)?;
 
         if mode.is_bulk() {
             bail!("Indexer still in bulk mode. Finish initial indexing, or force the mode change");
         }
 
-        Ok  (Self { connection })
+        Ok(Self { connection })
     }
 
-    fn insert_tx_data(&mut self, tx_id: &TxHash, tx: &bitcoin::Transaction, utxo_map: UtxoMap) -> Result<()> {
+    fn insert_tx_data(
+        &mut self,
+        tx_id: &TxHash,
+        tx: &bitcoin::Transaction,
+        utxo_map: UtxoMap,
+    ) -> Result<()> {
+        let mut tx_q = String::new();
+        let mut output_q = String::new();
+        let mut input_q = String::new();
 
-                    let mut tx_q = String::new();
-                    let mut output_q = String::new();
-                    let mut input_q = String::new();
+        let mut formatter = TxFormatter::new_from_mempool(
+            &mut tx_q,
+            &mut output_q,
+            &mut input_q,
+            Mode::Normal, // we can't be running in any other mode
+            utxo_map,
+        );
 
-                    let mut formatter = TxFormatter::new_from_mempool(
-                        &mut tx_q,
-                        &mut output_q,
-                        &mut input_q,
-                        Mode::Normal, // we can't be running in any other mode
-                        utxo_map,
-                    );
+        formatter.fmt(tx, tx_id);
 
-                    formatter.fmt(tx, tx_id);
+        drop(formatter);
 
-                    drop(formatter);
+        self.connection.batch_execute(&tx_q)?;
+        self.connection.batch_execute(&output_q)?;
+        self.connection.batch_execute(&input_q)?;
 
-                    self.connection.batch_execute(&tx_q)?;
-                    self.connection.batch_execute(&output_q)?;
-                    self.connection.batch_execute(&input_q)?;
-
-                    Ok(())
+        Ok(())
     }
 }
 
-
 impl super::MempoolStore for MempoolStore {
-    fn insert_iter<'a>(&mut self, txs: impl Iterator<Item=&'a WithHash<Option<bitcoin::Transaction>>>) -> Result<()> {
+    fn insert_iter<'a>(
+        &mut self,
+        txs: impl Iterator<Item = &'a WithHash<Option<bitcoin::Transaction>>>,
+    ) -> Result<()> {
         // maybe one day we can optimize, right now just loop
         for tx in txs {
             self.insert(tx)?;
@@ -1592,10 +1587,14 @@ impl super::MempoolStore for MempoolStore {
         let tx_id = tx.id;
 
         if let Some(ref tx) = tx.data {
-            let hash_id_out_points : Vec<_> = tx.input.clone().into_iter().map(|i| HashIdOutPoint::from(i.previous_output)).collect();
+            let hash_id_out_points: Vec<_> = tx
+                .input
+                .clone()
+                .into_iter()
+                .map(|i| HashIdOutPoint::from(i.previous_output))
+                .collect();
 
             if let Ok(utxo_map) = fetch_outputs(&self.connection, hash_id_out_points.iter()) {
-
                 if utxo_map.len() != tx.input.len() {
                     bail!("Couldn't find all inputs for tx {}", tx_id);
                 }
@@ -1604,6 +1603,5 @@ impl super::MempoolStore for MempoolStore {
         }
 
         Ok(())
-
     }
 }

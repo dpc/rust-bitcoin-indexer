@@ -7,7 +7,7 @@ pub mod util;
 use prelude::*;
 
 pub mod types;
-pub use crate::{WithHeightAndId, BlockData, BlockHeight};
+pub use crate::{BlockData, BlockHeight, WithHeightAndId};
 pub use types::*;
 
 use std::fmt::{Debug, Display};
