@@ -1,13 +1,7 @@
 #![allow(unused)] // need some cleanup
 
 use bitcoin_indexer::{
-    db::{self, DataStore},
-    node::prefetcher,
-    opts,
-    prelude::*,
-    types::*,
-    util::BottleCheck,
-    RpcInfo,
+    db, node::prefetcher, opts, prelude::*, types::*, util::BottleCheck, RpcInfo,
 };
 use bitcoincore_rpc::RpcApi;
 use log::info;
@@ -18,7 +12,7 @@ use common_failures::{prelude::*, quick_main};
 struct Indexer {
     node_starting_chainhead_height: BlockHeight,
     rpc: Arc<bitcoincore_rpc::Client>,
-    db: Box<dyn db::DataStore>,
+    db: Box<dyn db::IndexerStore>,
     bottlecheck_db: BottleCheck,
 }
 
@@ -28,7 +22,7 @@ impl Indexer {
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()? as BlockHeight;
-        let mut db = db::pg::Postresql::new(config.db_url, node_starting_chainhead_height)?;
+        let mut db = db::pg::IndexerStore::new(config.db_url, node_starting_chainhead_height)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {
@@ -106,7 +100,7 @@ fn run() -> Result<()> {
     let opts: opts::Opts = structopt::StructOpt::from_args();
 
     if opts.wipe_db {
-        db::pg::Postresql::wipe(&env::var("DATABASE_URL")?)?;
+        db::pg::IndexerStore::wipe(&env::var("DATABASE_URL")?)?;
         return Ok(());
     }
 

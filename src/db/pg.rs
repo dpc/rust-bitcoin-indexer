@@ -88,7 +88,6 @@ fn hash_id_and_rest_to_hash(id_and_rest: (Vec<u8>, Vec<u8>)) -> BlockHash {
 const SQL_INSERT_VALUES_SIZE: usize = 9000;
 const SQL_HASH_ID_SIZE: usize = 16;
 
-
 struct SqlFormatter<'a> {
     out: &'a mut String,
     opening: &'static str,
@@ -203,26 +202,14 @@ impl<'a> InputFormatter<'a> {
     }
 }
 
-struct TxFormatter<'a> {
+struct BlockTxFormatter<'a> {
     block_tx: SqlFormatter<'a>,
-    tx: SqlFormatter<'a>,
-
-    output_fmt: OutputFormatter<'a>,
-    input_fmt: InputFormatter<'a>,
-
-    inputs_utxo_map: UtxoMap,
-    tx_ids: TxIdMap,
 }
 
-impl<'a> TxFormatter<'a> {
+impl<'a> BlockTxFormatter<'a> {
     fn new(
         block_tx_s: &'a mut String,
-        tx_s: &'a mut String,
-        output_s: &'a mut String,
-        input_s: &'a mut String,
         mode: Mode,
-        inputs_utxo_map: UtxoMap,
-        tx_ids: TxIdMap,
     ) -> Self {
         Self {
             block_tx: SqlFormatter::new(
@@ -230,24 +217,13 @@ impl<'a> TxFormatter<'a> {
                 "INSERT INTO block_tx(block_hash_id, tx_hash_id)VALUES",
                 mode,
             ),
-            tx: SqlFormatter::new(
-                tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase) VALUES",
-                mode,
-            ),
-            output_fmt: OutputFormatter::new(output_s, mode),
-            input_fmt: InputFormatter::new(input_s, mode),
-            inputs_utxo_map,
-            tx_ids,
         }
     }
 
-    fn fmt_one(
+    fn fmt(
         &mut self,
         block: &BlockCore,
-        tx: &blockdata::transaction::Transaction,
         tx_id: &Sha256dHash,
-        fee: u64,
     ) {
         self.block_tx.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
@@ -256,7 +232,43 @@ impl<'a> TxFormatter<'a> {
             write_hash_id_hex(s, &tx_id).unwrap();
             s.write_str("'::bytea)").unwrap();
         });
+    }
+}
+struct TxFormatter<'a> {
+    tx: SqlFormatter<'a>,
 
+    output_fmt: OutputFormatter<'a>,
+    input_fmt: InputFormatter<'a>,
+
+    inputs_utxo_map: UtxoMap,
+}
+
+impl<'a> TxFormatter<'a> {
+    fn new(
+        tx_s: &'a mut String,
+        output_s: &'a mut String,
+        input_s: &'a mut String,
+        mode: Mode,
+        inputs_utxo_map: UtxoMap,
+    ) -> Self {
+        Self {
+            tx: SqlFormatter::new(
+                tx_s,
+                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase) VALUES",
+                mode,
+            ),
+            output_fmt: OutputFormatter::new(output_s, mode),
+            input_fmt: InputFormatter::new(input_s, mode),
+            inputs_utxo_map,
+        }
+    }
+
+    fn fmt_one(
+        &mut self,
+        tx: &blockdata::transaction::Transaction,
+        tx_id: &Sha256dHash,
+        fee: u64,
+    ) {
         self.tx.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
@@ -278,9 +290,8 @@ impl<'a> TxFormatter<'a> {
         });
     }
 
-    fn fmt(&mut self, block: &BlockCore, tx: &blockdata::transaction::Transaction, tx_i: usize) {
+    fn fmt(&mut self, tx: &blockdata::transaction::Transaction, tx_id: &TxHash) {
         let is_coinbase = tx.is_coin_base();
-        let tx_id = self.tx_ids[&(block.height, tx_i)];
 
         let fee = if tx.is_coin_base() {
             0
@@ -297,7 +308,7 @@ impl<'a> TxFormatter<'a> {
             input_value_sum - output_value_sum
         };
 
-        self.fmt_one(block, tx, &tx_id, fee);
+        self.fmt_one(tx, &tx_id, fee);
 
         for (idx, output) in tx.output.iter().enumerate() {
             self.output_fmt.fmt(&tx_id, output, idx as u32);
@@ -316,6 +327,8 @@ struct BlockFormatter<'a> {
     block: SqlFormatter<'a>,
 
     tx_fmt: TxFormatter<'a>,
+    block_tx_fmt: BlockTxFormatter<'a>,
+    tx_ids: TxIdMap,
 }
 
 impl<'a> BlockFormatter<'a> {
@@ -343,14 +356,17 @@ impl<'a> BlockFormatter<'a> {
                 mode,
             ),
             tx_fmt: TxFormatter::new(
-                block_tx_s,
                 tx_s,
                 output_s,
                 input_s,
                 mode,
                 inputs_utxo_map,
-                tx_ids,
             ),
+            block_tx_fmt: BlockTxFormatter::new(
+                block_tx_s,
+                mode,
+            ),
+            tx_ids,
         }
     }
 
@@ -386,7 +402,9 @@ impl<'a> BlockFormatter<'a> {
         self.fmt_one(block);
 
         for (tx_i, tx) in block.data.txdata.iter().enumerate() {
-            self.tx_fmt.fmt(block, tx, tx_i);
+            let tx_id = &self.tx_ids[&(block.height, tx_i)];
+            self.tx_fmt.fmt(tx, tx_id);
+            self.block_tx_fmt.fmt(block, tx_id);
         }
     }
 }
@@ -418,6 +436,27 @@ fn create_fetch_outputs_query<'a>(
             q
         })
         .collect()
+}
+
+fn fetch_outputs<'a>(
+    conn: &Connection,
+    outputs: impl Iterator<Item = &'a HashIdOutPoint>,
+) -> Result<UtxoMap> {
+    let mut out = HashMap::new();
+                for q in create_fetch_outputs_query(outputs) {
+                    for row in &conn.query(&q, &[])? {
+                        out.insert(
+                            HashIdOutPoint {
+                                tx_hash_id: row.get::<_, Vec<u8>>(0),
+                                vout: row.get::<_, i32>(1) as u32,
+                            },
+                            UtxoSetEntry {
+                                value: row.get::<_, i64>(2) as u64,
+                            },
+                        );
+                    }
+                }
+                Ok(out)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -498,19 +537,7 @@ impl UtxoSetCache {
 
         trace_time(
             || {
-                for q in create_fetch_outputs_query(missing.iter()) {
-                    for row in &conn.query(&q, &[])? {
-                        out.insert(
-                            HashIdOutPoint {
-                                tx_hash_id: row.get::<_, Vec<u8>>(0),
-                                vout: row.get::<_, i32>(1) as u32,
-                            },
-                            UtxoSetEntry {
-                                value: row.get::<_, i64>(2) as u64,
-                            },
-                        );
-                    }
-                }
+                out = fetch_outputs(&conn, missing.iter())?;
                 Ok(())
             },
             |duration, _| {
@@ -547,7 +574,7 @@ fn execute_bulk_insert_queries(
 ) -> Result<()> {
     let start = Instant::now();
     let transaction = conn.transaction()?;
-    for (i, s) in queries.into_iter().enumerate() {
+    for (i, s) in queries.enumerate() {
         trace_time(
             || Ok(transaction.batch_execute(&s)?),
             |duration, _| {
@@ -576,7 +603,7 @@ type BlocksInFlight = HashSet<BlockHash>;
 /// Insertion Worker Thread
 ///
 /// Reponsible for actually inserting data into the db.
-struct InsertThread {
+struct AsyncInsertThread {
     tx: Option<crossbeam_channel::Sender<(u64, Vec<crate::BlockCore>)>>,
     utxo_fetching_thread: Option<std::thread::JoinHandle<Result<()>>>,
     query_fmt_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -643,7 +670,7 @@ impl fmt::Display for Mode {
 
 type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
 
-impl InsertThread {
+impl AsyncInsertThread {
     fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Self {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
@@ -654,8 +681,13 @@ impl InsertThread {
             crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>)>(0);
         let (query_fmt_tx, query_fmt_rx) =
             crossbeam_channel::bounded::<(u64, Vec<crate::BlockCore>, UtxoMap, TxIdMap)>(0);
-        let (writer_tx, writer_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<String>, HashSet<BlockHash>, BlockHeight, usize)>(0);
+        let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
+            u64,
+            Vec<String>,
+            HashSet<BlockHash>,
+            BlockHeight,
+            usize,
+        )>(0);
 
         let utxo_fetching_thread = std::thread::spawn({
             let url = url.clone();
@@ -811,9 +843,9 @@ impl InsertThread {
                         "Block {}H fully indexed and commited; {}block/s; {}tx/s",
                         max_block_height,
                         (block_ids.len() as u64 * 1000)
-                            / (duration.as_secs() as u64 * 1000 + duration.subsec_millis() as u64),
+                            / (duration.as_secs() as u64 * 1000 + u64::from(duration.subsec_millis())),
                         (tx_len as u64 * 1000)
-                            / (duration.as_secs() as u64 * 1000 + duration.subsec_millis() as u64),
+                            / (duration.as_secs() as u64 * 1000 + u64::from(duration.subsec_millis())),
                     );
 
                     let mut any_missing = false;
@@ -830,7 +862,7 @@ impl InsertThread {
             })
         });
 
-        InsertThread {
+        AsyncInsertThread {
             tx: Some(utxo_fetching_tx),
             utxo_fetching_thread: Some(utxo_fetching_thread),
             query_fmt_thread: Some(query_fmt_thread),
@@ -839,7 +871,7 @@ impl InsertThread {
     }
 }
 
-impl Drop for InsertThread {
+impl Drop for AsyncInsertThread {
     fn drop(&mut self) {
         drop(self.tx.take());
 
@@ -857,10 +889,10 @@ impl Drop for InsertThread {
     }
 }
 
-pub struct Postresql {
+pub struct IndexerStore {
     url: String,
     connection: Connection,
-    pipeline: Option<InsertThread>,
+    pipeline: Option<AsyncInsertThread>,
     batch: Vec<crate::BlockCore>,
     batch_txs_total: u64,
     batch_id: u64,
@@ -879,13 +911,13 @@ pub struct Postresql {
     pending_reorg: BTreeMap<BlockHeight, BlockCore>,
 }
 
-impl Drop for Postresql {
+impl Drop for IndexerStore {
     fn drop(&mut self) {
         self.stop_workers();
     }
 }
 
-impl Postresql {
+impl IndexerStore {
     pub fn new(url: String, node_chain_head_height: BlockHeight) -> Result<Self> {
         let connection = establish_connection(&url);
         Self::init(&connection)?;
@@ -897,7 +929,7 @@ impl Postresql {
             chain_block_count, chain_current_block_count,
             "db is supposed to preserve reorg atomicity"
         );
-        let mut s = Postresql {
+        let mut s = IndexerStore {
             url,
             connection,
             pipeline: None,
@@ -1019,8 +1051,11 @@ impl Postresql {
 
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
-        self.pipeline =
-            Some(InsertThread::new(self.url.clone(), self.in_flight.clone(), self.mode))
+        self.pipeline = Some(AsyncInsertThread::new(
+            self.url.clone(),
+            self.in_flight.clone(),
+            self.mode,
+        ))
     }
 
     fn flush_workers(&mut self) -> Result<()> {
@@ -1392,7 +1427,7 @@ where
         .map(|row| (row.get::<_, T1>(0), row.get::<_, T2>(1))))
 }
 
-impl DataStore for Postresql {
+impl super::IndexerStore for IndexerStore {
     fn get_head_height(&mut self) -> Result<Option<BlockHeight>> {
         Ok(if self.chain_block_count == 0 {
             None
@@ -1467,5 +1502,78 @@ impl crate::event_source::EventSource for postgres::Connection {
         }
 
         Ok((res, last))
+    }
+}
+
+pub struct MempoolStore {
+    #[allow(unused)]
+    connection: Connection,
+}
+
+impl MempoolStore {
+    pub fn new(url: String) -> Result<Self> {
+        let connection = establish_connection(&url);
+
+        Ok  (Self { connection })
+    }
+
+    fn insert_tx_data(&mut self, tx_id: &TxHash, tx: &bitcoin::Transaction, utxo_map: UtxoMap) -> Result<()> {
+
+                    let mut tx_q = String::new();
+                    let mut output_q = String::new();
+                    let mut input_q = String::new();
+
+                    let mut formatter = TxFormatter::new(
+                        &mut tx_q,
+                        &mut output_q,
+                        &mut input_q,
+                        Mode::Normal, // we can't be running in any othher mode
+                        utxo_map,
+                    );
+
+                    formatter.fmt(tx, tx_id);
+
+                    drop(formatter);
+
+                    self.connection.batch_execute(&tx_q)?;
+                    self.connection.batch_execute(&output_q)?;
+                    self.connection.batch_execute(&input_q)?;
+
+                    Ok(())
+    }
+}
+
+
+impl super::MempoolStore for MempoolStore {
+    fn insert_iter<'a>(&mut self, txs: impl Iterator<Item=&'a WithHash<Option<bitcoin::Transaction>>>) -> Result<()> {
+        // maybe one day we can optimize, right now just loop
+        for tx in txs {
+            self.insert(tx)?;
+        }
+        Ok(())
+    }
+
+    fn insert(&mut self, tx: &WithHash<Option<bitcoin::Transaction>>) -> Result<()> {
+        self.connection.query(
+            "INSERT INTO mempool (tx_hash_id) VALUES ($1) ON CONFLICT DO NOTHING;",
+            &[&hash_to_hash_id(&tx.id)]
+        )?;
+
+        let tx_id = tx.id;
+
+        if let Some(ref tx) = tx.data {
+            let hash_id_out_points : Vec<_> = tx.input.clone().into_iter().map(|i| HashIdOutPoint::from(i.previous_output)).collect();
+
+            if let Some(utxo_map) = fetch_outputs(&self.connection, hash_id_out_points.iter()).ok() {
+
+                if utxo_map.len() != tx.input.len() {
+                    bail!("Couldn't find all inputs for tx {}", tx_id);
+                }
+                self.insert_tx_data(&tx_id, tx, utxo_map)?;
+            }
+        }
+
+        Ok(())
+
     }
 }

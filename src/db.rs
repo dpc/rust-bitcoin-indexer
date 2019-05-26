@@ -4,7 +4,7 @@ pub mod pg;
 use crate::{prelude::*, types::*, TxHash};
 use std::collections::BTreeMap;
 
-pub trait DataStore {
+pub trait IndexerStore {
     /// Get the height of the stored chainhead
     fn get_head_height(&mut self) -> Result<Option<BlockHeight>>;
 
@@ -15,4 +15,9 @@ pub trait DataStore {
 
     /// Insert a new block: either extending current `head` or starting a reorg
     fn insert(&mut self, info: crate::BlockCore) -> Result<()>;
+}
+
+pub trait MempoolStore {
+    fn insert_iter<'a>(&mut self, tx: impl Iterator<Item=&'a WithHash<Option<bitcoin::Transaction>>>) -> Result<()>;
+    fn insert(&mut self, tx: &WithHash<Option<bitcoin::Transaction>>) -> Result<()>;
 }

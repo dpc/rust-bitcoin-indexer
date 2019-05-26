@@ -17,6 +17,13 @@ pub struct Block<H, D = ()> {
     pub data: D,
 }
 
+pub struct WithId<H, D = ()> {
+    pub id: H,
+    pub data: D,
+}
+
+pub type WithHash<T> = WithId<Sha256dHash, T>;
+
 pub type BlockHeight = u32;
 pub type BlockHash = Sha256dHash;
 pub struct BlockHeightAndHash {

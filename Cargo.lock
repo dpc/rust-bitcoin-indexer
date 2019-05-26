@@ -128,7 +128,7 @@ dependencies = [
  "bitcoin 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitcoin-bech32 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitcoin_hashes 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "bitcoincore-rpc 0.5.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth)",
+ "bitcoincore-rpc 0.6.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls)",
  "common_failures 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -161,13 +161,13 @@ dependencies = [
 
 [[package]]
 name = "bitcoincore-rpc"
-version = "0.5.0"
-source = "git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth#bf38c81b706d39d963844c26ab43ce982d0c7783"
+version = "0.6.0"
+source = "git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls#7c9684f4e40bf578d769295fd1a4e942c79d02ae"
 dependencies = [
  "bitcoin 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitcoin-amount 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitcoin_hashes 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "bitcoincore-rpc-json 0.5.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth)",
+ "bitcoincore-rpc-json 0.6.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "jsonrpc 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -179,8 +179,8 @@ dependencies = [
 
 [[package]]
 name = "bitcoincore-rpc-json"
-version = "0.5.0"
-source = "git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth#bf38c81b706d39d963844c26ab43ce982d0c7783"
+version = "0.6.0"
+source = "git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls#7c9684f4e40bf578d769295fd1a4e942c79d02ae"
 dependencies = [
  "bitcoin 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitcoin-amount 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1360,8 +1360,8 @@ dependencies = [
 "checksum bitcoin-amount 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "0bd5ae6712113fac4edfa917b1d865801f476b021a108e6749ce20d3057abb9e"
 "checksum bitcoin-bech32 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "4e67e8ccfc663811145e6cabdb9a2a6978877f72b048516e83eb95622e9b2554"
 "checksum bitcoin_hashes 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "2b7a2e9773ee7ae7f2560f0426c938f57902dcb9e39321b0cbd608f47ed579a4"
-"checksum bitcoincore-rpc 0.5.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth)" = "<none>"
-"checksum bitcoincore-rpc-json 0.5.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=auth)" = "<none>"
+"checksum bitcoincore-rpc 0.6.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls)" = "<none>"
+"checksum bitcoincore-rpc-json 0.6.0 (git+https://github.com/dpc/rust-bitcoincore-rpc?branch=more-calls)" = "<none>"
 "checksum bitflags 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "bd1fa8ad26490b0a5cfec99089952250301b6716cdeaa7c9ab229598fb82ab66"
 "checksum block-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "a076c298b9ecdb530ed9d967e74a6027d6a7478924520acddcddc24c1c8ab3ab"
 "checksum byte-tools 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "560c32574a12a89ecd91f5e742165893f86e3ab98d21f8ea548658eb9eef5f40"

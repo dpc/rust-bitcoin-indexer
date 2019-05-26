@@ -45,6 +45,16 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS input_tx_hash_id ON input (tx_hash_id);
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'mempool' AND constraint_type = 'PRIMARY KEY'
+  ) THEN
+    ALTER TABLE mempool ADD PRIMARY KEY (tx_hash_id);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS mempool_ts ON mempool (ts);
+
 ANALYZE block;
 ANALYZE tx;
 ANALYZE block_tx;
