@@ -1443,7 +1443,7 @@ impl super::IndexerStore for IndexerStore {
         }
 
         if let Some(block) = self.pending_reorg.get(&height) {
-            return Ok(Some(block.id.clone()));
+            return Ok(Some(block.id));
         }
 
         // TODO: This could be done better, if we were just tracking

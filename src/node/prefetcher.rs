@@ -42,7 +42,7 @@ impl Rpc for bitcoincore_rpc::Client {
     }
 
     fn get_block_id_by_height(&self, height: BlockHeight) -> Result<Option<Self::Id>> {
-        match self.get_block_hash(height as u64) {
+        match self.get_block_hash(u64::from(height)) {
             Err(e) => {
                 if e.to_string().contains("Block height out of range") {
                     Ok(None)
@@ -382,7 +382,7 @@ where
                                 .get_min_height_in_progress()
                                 .expect("at least current height");
                         std::thread::sleep(Duration::from_millis(
-                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * ahead_minimum as u64,
+                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * u64::from(ahead_minimum),
                         ));
                         retry_count += 1;
                         if retry_count % 10 == 0 {

@@ -1,11 +1,5 @@
 pub use bitcoin_hashes::{hex::FromHex as _, Hash as _};
 
-pub use bitcoin::{
-    blockdata::transaction::{Transaction, TxIn, TxOut},
-    consensus::Decodable,
-    util::key::PrivateKey,
-};
-
 /// Data in a block
 ///
 /// Comes associated with height and hash of the block.
@@ -21,6 +15,7 @@ pub struct WithId<H, D = ()> {
     pub id: H,
     pub data: D,
 }
+
 
 pub type WithHash<T> = WithId<Sha256dHash, T>;
 
