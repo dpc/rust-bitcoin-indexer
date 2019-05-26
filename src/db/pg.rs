@@ -1001,6 +1001,7 @@ impl IndexerStore {
         )?
         .map(hash_id_and_rest_to_hash))
     }
+
     fn read_indexer_state(conn: &Connection) -> Result<Mode> {
         let state = conn.query("SELECT bulk_mode FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
@@ -1512,6 +1513,13 @@ pub struct MempoolStore {
 impl MempoolStore {
     pub fn new(url: String) -> Result<Self> {
         let connection = establish_connection(&url);
+
+
+        let mode = IndexerStore::read_indexer_state(&connection)?;
+
+        if mode.is_bulk() {
+            bail!("Indexer still in bulk mode. Finish initial indexing, or force the mode change");
+        }
 
         Ok  (Self { connection })
     }
