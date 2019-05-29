@@ -1,5 +1,7 @@
 -- fresh/base schema: a schema we populate an empty db with
 
+-- **Important**:
+-- * all columns sorted by size to minimize padding (https://stackoverflow.com/questions/2966524/calculating-and-saving-space-in-postgresql/7431468#7431468)
 -- signgle record table to keep persistent indexer state
 CREATE TABLE IF NOT EXISTS indexer_state (
   bulk_mode BOOLEAN NOT NULL
@@ -12,20 +14,20 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 -- https://github.com/dpc/rust-bitcoin-indexer/wiki/How-to-interact-with-a-blockchain#canceling-protocol
 CREATE TABLE IF NOT EXISTS event (
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
-  block_hash_id BYTEA NOT NULL,
-  revert BOOLEAN NOT NULL DEFAULT FALSE
+  revert BOOLEAN NOT NULL DEFAULT FALSE,
+  block_hash_id BYTEA NOT NULL
 );
 
 -- blocks: insert only
 CREATE TABLE IF NOT EXISTS block (
+  indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now())),
+  time BIGINT NOT NULL, -- time from the block itself
+  height INT NOT NULL,
+  extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table (and maybe in the whole database)
   hash_id BYTEA NOT NULL UNIQUE PRIMARY KEY, -- the hash is split in two to save when referencing in other columns
   hash_rest BYTEA NOT NULL,
-  height INT NOT NULL,
   prev_hash_id BYTEA NOT NULL,
-  merkle_root BYTEA NOT NULL,
-  time BIGINT NOT NULL, -- time from the block itself
-  extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table (and maybe in the whole database)
-  indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now()))
+  merkle_root BYTEA NOT NULL
 );
 
 -- We always want these two, as a lot of logic is based
@@ -43,28 +45,28 @@ CREATE TABLE IF NOT EXISTS block_tx (
 
 -- txs: insert only
 CREATE TABLE IF NOT EXISTS tx (
-  hash_id BYTEA NOT NULL,
-  hash_rest BYTEA NOT NULL,
-  size INT NOT NULL,
-  weight INT NOT NULL,
+  mempool_ts TIMESTAMP DEFAULT NULL, -- NULL if it was indexed from an indexed block
   fee BIGINT NOT NULL,
   locktime BIGINT NOT NULL,
+  size INT NOT NULL,
+  weight INT NOT NULL,
   coinbase BOOLEAN NOT NULL,
-  mempool_ts TIMESTAMP DEFAULT NULL -- NULL if it was indexed from an indexed block
+  hash_id BYTEA NOT NULL,
+  hash_rest BYTEA NOT NULL
 );
 
 -- outputs: insert only
 CREATE TABLE IF NOT EXISTS output (
-  tx_hash_id BYTEA NOT NULL,
-  tx_idx INT NOT NULL,
   value BIGINT NOT NULL,
+  tx_idx INT NOT NULL,
+  tx_hash_id BYTEA NOT NULL,
   address TEXT
 );
 
 -- input: insert only
 CREATE TABLE IF NOT EXISTS input (
-  output_tx_hash_id BYTEA NOT NULL, -- output id this tx input spends
   output_tx_idx INT NOT NULL,
-  tx_hash_id BYTEA NOT NULL, -- tx id this input is from
-  has_witness BOOLEAN NOT NULL
+  has_witness BOOLEAN NOT NULL,
+  output_tx_hash_id BYTEA NOT NULL, -- output id this tx input spends
+  tx_hash_id BYTEA NOT NULL -- tx id this input is from
 );
