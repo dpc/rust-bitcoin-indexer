@@ -6,8 +6,6 @@
 --
 -- Keys & indices
 --
-CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
-
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -30,6 +28,8 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS tx_hash_id ON tx (hash_id);
 CREATE INDEX IF NOT EXISTS tx_coinbase ON tx (coinbase);
 CREATE INDEX IF NOT EXISTS tx_mempool_ts ON tx (mempool_ts);
+CREATE INDEX IF NOT EXISTS tx_current_height ON tx (current_height);
+
 
 DO $$
 BEGIN
@@ -51,6 +51,7 @@ BEGIN
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS input_tx_hash_id ON input (tx_hash_id);
+
 
 --
 -- Utilities

@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS block (
 -- so it doesn't matter that much (perforamnce wise)
 CREATE INDEX IF NOT EXISTS block_height ON block (height);
 CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
+CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
+
 
 -- block -> tx: insert only
 -- mapping between blocks and txes they include
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS tx (
   mempool_ts TIMESTAMP DEFAULT NULL, -- NULL if it was indexed from an indexed block
   fee BIGINT NOT NULL,
   locktime BIGINT NOT NULL,
+  current_height INT DEFAULT NULL, -- Warning: mutable! But useful enough to keep it: especialy useful for mempool queries
   size INT NOT NULL,
   weight INT NOT NULL,
   coinbase BOOLEAN NOT NULL,

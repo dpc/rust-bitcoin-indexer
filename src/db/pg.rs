@@ -91,6 +91,7 @@ struct SqlFormatter<'a> {
     out: &'a mut String,
     opening: &'static str,
     mode: Mode,
+    on_conflict: &'static str,
 
     count: usize,
 }
@@ -102,9 +103,19 @@ impl<'a> SqlFormatter<'a> {
             opening,
             mode,
             count: 0,
+            on_conflict: ""
         }
     }
 
+    fn new_update_current_height(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
+        Self {
+            out,
+            opening,
+            mode,
+            count: 0,
+            on_conflict: if mode.is_bulk() {"" } else {"ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height"}
+        }
+    }
     fn fmt_with(&mut self, f: impl FnOnce(&mut String)) {
         self.maybe_flush();
         if self.count == 0 {
@@ -127,7 +138,10 @@ impl<'a> SqlFormatter<'a> {
         self.count = 0;
         if !self.mode.is_bulk() {
             self.out.write_str("ON CONFLICT DO NOTHING").unwrap();
+        } else {
+            self.out.write_str(self.on_conflict).unwrap();
         }
+
         self.out.write_str(";").unwrap();
     }
 }
@@ -246,9 +260,9 @@ impl<'a> TxFormatter<'a> {
         inputs_utxo_map: UtxoMap,
     ) -> Self {
         Self {
-            tx: SqlFormatter::new(
+            tx: SqlFormatter::new_update_current_height(
                 tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase) VALUES",
+                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
                 mode,
             ),
             output_fmt: OutputFormatter::new(output_s, mode),
@@ -278,7 +292,7 @@ impl<'a> TxFormatter<'a> {
         }
     }
 
-    fn fmt_one(&mut self, tx: &bitcoin::Transaction, tx_id: &Sha256dHash, fee: u64) {
+    fn fmt_one(&mut self, block_height: Option<BlockHeight>, tx: &bitcoin::Transaction, tx_id: &Sha256dHash, fee: u64) {
         let from_mempool = self.from_mempool;
         self.tx.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
@@ -289,13 +303,14 @@ impl<'a> TxFormatter<'a> {
             let weight = tx.get_weight();
 
             s.write_fmt(format_args!(
-                "'::bytea,{},{},{},{},{}",
+                "'::bytea,{},{},{},{},{},{}",
                 /* TODO: https://github.com/rust-bitcoin/rust-bitcoin/issues/266 */
                 weight / 4,
                 weight,
                 fee,
                 tx.lock_time,
-                tx.is_coin_base()
+                tx.is_coin_base(),
+                block_height.map(|h| h.to_string()).unwrap_or_else(|| "NULL".into()),
             ))
             .unwrap();
             if from_mempool {
@@ -305,7 +320,7 @@ impl<'a> TxFormatter<'a> {
         });
     }
 
-    fn fmt(&mut self, tx: &bitcoin::Transaction, tx_id: &TxHash) {
+    fn fmt(&mut self, block_height: Option<BlockHeight>, tx: &bitcoin::Transaction, tx_id: &TxHash) {
         let is_coinbase = tx.is_coin_base();
 
         let fee = if tx.is_coin_base() {
@@ -323,7 +338,7 @@ impl<'a> TxFormatter<'a> {
             input_value_sum - output_value_sum
         };
 
-        self.fmt_one(tx, &tx_id, fee);
+        self.fmt_one(block_height, tx, &tx_id, fee);
 
         for (idx, output) in tx.output.iter().enumerate() {
             self.output_fmt.fmt(&tx_id, output, idx as u32);
@@ -418,7 +433,7 @@ impl<'a> BlockFormatter<'a> {
 
         for (tx_i, tx) in block.data.txdata.iter().enumerate() {
             let tx_id = &self.tx_ids[&(block.height, tx_i)];
-            self.tx_fmt.fmt(tx, tx_id);
+            self.tx_fmt.fmt(Some(block.height), tx, tx_id);
             self.block_tx_fmt.fmt(block, tx_id);
         }
     }
@@ -1337,6 +1352,10 @@ impl IndexerStore {
                         &[&(block_hash_id)],
                     )?;
                     transaction.execute(
+                        "UPDATE tx SET current_height = NULL WHERE current_height = $1;",
+                        &[&(block.height as BlockHeightSigned)],
+                    )?;
+                    transaction.execute(
                         "INSERT INTO event (block_hash_id) VALUES ($1);",
                         &[&block_hash_id],
                     )?;
@@ -1560,7 +1579,7 @@ impl MempoolStore {
             utxo_map,
         );
 
-        formatter.fmt(tx, tx_id);
+        formatter.fmt(None, tx, tx_id);
 
         drop(formatter);
 
