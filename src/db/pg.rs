@@ -33,8 +33,9 @@ fn calculate_tx_id_with_workarounds(
     network: bitcoin::Network,
 ) -> Sha256dHash {
     let is_coinbase = tx.is_coin_base();
-    if network == bitcoin::Network::Bitcoin {
-    if block.height == 91842 && is_coinbase {
+    if network != bitcoin::Network::Bitcoin {
+        tx.txid()
+    } else if block.height == 91842 && is_coinbase {
         // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
         // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
         //
@@ -49,9 +50,6 @@ fn calculate_tx_id_with_workarounds(
         TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
             .unwrap()
     } else {
-        tx.txid()
-    }
-    }else {
         tx.txid()
     }
 }
@@ -291,7 +289,7 @@ impl<'a> TxFormatter<'a> {
         Self {
             tx: SqlFormatter::new(
                 tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, mempool_ts) VALUES",
+                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height, mempool_ts) VALUES",
                 mode,
             ),
             output_fmt: OutputFormatter::new(output_s, mode, network),
