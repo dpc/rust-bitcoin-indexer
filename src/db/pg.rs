@@ -30,8 +30,10 @@ pub fn establish_connection(url: &str) -> Connection {
 fn calculate_tx_id_with_workarounds(
     block: &BlockData,
     tx: &bitcoin::blockdata::transaction::Transaction,
+    network: bitcoin::Network,
 ) -> Sha256dHash {
     let is_coinbase = tx.is_coin_base();
+    if network == bitcoin::Network::Bitcoin {
     if block.height == 91842 && is_coinbase {
         // d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
         // e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469
@@ -47,6 +49,9 @@ fn calculate_tx_id_with_workarounds(
         TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
             .unwrap()
     } else {
+        tx.txid()
+    }
+    }else {
         tx.txid()
     }
 }
@@ -506,6 +511,14 @@ struct HashIdOutPoint {
     vout: u32,
 }
 
+impl fmt::Display for HashIdOutPoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // TODO: no alloc
+        self.tx_hash_id.write_hex(f)?;
+        write!(f, "...:{}", self.vout)
+    }
+}
+
 impl HashIdOutPoint {
     fn from_tx_hash_and_idx(tx_hash: &Sha256dHash, idx: u32) -> Self {
         Self {
@@ -742,7 +755,7 @@ impl AsyncInsertThread {
                                             (
                                                 block.height,
                                                 tx_i,
-                                                calculate_tx_id_with_workarounds(block, tx),
+                                                calculate_tx_id_with_workarounds(block, tx, network),
                                             )
                                         },
                                     )
