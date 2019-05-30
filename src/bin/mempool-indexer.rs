@@ -14,11 +14,12 @@ fn run() -> Result<()> {
     dotenv::dotenv()?;
     let db_url = env::var("DATABASE_URL")?;
     let node_url = env::var("NODE_RPC_URL")?;
-    let mut db = db::pg::MempoolStore::new(db_url)?;
 
     let rpc_info = bitcoin_indexer::RpcInfo::from_url(&node_url)?;
 
     let rpc = rpc_info.to_rpc_client()?;
+    let network = bitcoin_indexer::util::bitcoin::network_from_str(&rpc.get_blockchain_info()?.chain)?;
+    let mut db = db::pg::MempoolStore::new(db_url, network)?;
 
     let mut done = HashSet::new();
 

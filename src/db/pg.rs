@@ -156,22 +156,24 @@ impl<'a> Drop for SqlFormatter<'a> {
 
 struct OutputFormatter<'a> {
     output: SqlFormatter<'a>,
+    network: bitcoin::Network,
 }
 
 impl<'a> OutputFormatter<'a> {
-    fn new(output_s: &'a mut String, mode: Mode) -> Self {
+    fn new(output_s: &'a mut String, mode: Mode, network: bitcoin::Network) -> Self {
         Self {
             output: SqlFormatter::new(
                 output_s,
                 "INSERT INTO output(tx_hash_id, tx_idx, value, address)VALUES",
                 mode,
             ),
+            network
         }
     }
 
     fn fmt(&mut self, tx_id: &Sha256dHash, output: &bitcoin::TxOut, vout: u32) {
-        let network = bitcoin::network::constants::Network::Bitcoin;
-        self.output.fmt_with(move |s| {
+        let network = self.network;
+        self.output.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
             s.write_fmt(format_args!(
@@ -257,6 +259,7 @@ impl<'a> TxFormatter<'a> {
         output_s: &'a mut String,
         input_s: &'a mut String,
         mode: Mode,
+        network: bitcoin::Network,
         inputs_utxo_map: UtxoMap,
     ) -> Self {
         Self {
@@ -265,7 +268,7 @@ impl<'a> TxFormatter<'a> {
                 "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
                 mode,
             ),
-            output_fmt: OutputFormatter::new(output_s, mode),
+            output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
             from_mempool: false,
@@ -277,6 +280,7 @@ impl<'a> TxFormatter<'a> {
         output_s: &'a mut String,
         input_s: &'a mut String,
         mode: Mode,
+        network: bitcoin::Network,
         inputs_utxo_map: UtxoMap,
     ) -> Self {
         Self {
@@ -285,7 +289,7 @@ impl<'a> TxFormatter<'a> {
                 "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, mempool_ts) VALUES",
                 mode,
             ),
-            output_fmt: OutputFormatter::new(output_s, mode),
+            output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
             from_mempool: true,
@@ -370,6 +374,7 @@ impl<'a> BlockFormatter<'a> {
         output_s: &'a mut String,
         input_s: &'a mut String,
         mode: Mode,
+        network: bitcoin::Network,
         inputs_utxo_map: UtxoMap,
         tx_ids: TxIdMap,
     ) -> Self {
@@ -390,6 +395,7 @@ impl<'a> BlockFormatter<'a> {
                 output_s,
                 input_s,
                 mode,
+                network,
                 inputs_utxo_map,
             ),
             block_tx_fmt: BlockTxFormatter::new(
@@ -701,7 +707,7 @@ impl fmt::Display for Mode {
 type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
 
 impl AsyncInsertThread {
-    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode) -> Self {
+    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode, network: bitcoin::Network) -> Self {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -810,6 +816,7 @@ impl AsyncInsertThread {
                         &mut output_q,
                         &mut input_q,
                         mode,
+                        network,
                         inputs_utxo_map,
                         tx_ids,
                     );
@@ -929,6 +936,7 @@ pub struct IndexerStore {
     batch_txs_total: u64,
     batch_id: u64,
     mode: Mode,
+    network: bitcoin::Network,
     node_chain_head_height: BlockHeight,
 
     // blocks that were sent to workers, but
@@ -950,7 +958,7 @@ impl Drop for IndexerStore {
 }
 
 impl IndexerStore {
-    pub fn new(url: String, node_chain_head_height: BlockHeight) -> Result<Self> {
+    pub fn new(url: String, node_chain_head_height: BlockHeight, network: bitcoin::Network) -> Result<Self> {
         let connection = establish_connection(&url);
         Self::init(&connection)?;
         let mode = Self::read_indexer_state(&connection)?;
@@ -969,6 +977,7 @@ impl IndexerStore {
             batch_txs_total: 0,
             batch_id: 0,
             mode,
+            network,
             node_chain_head_height,
             pending_reorg: BTreeMap::default(),
             in_flight: Arc::new(Mutex::new(BlocksInFlight::new())),
@@ -1088,6 +1097,7 @@ impl IndexerStore {
             self.url.clone(),
             self.in_flight.clone(),
             self.mode,
+            self.network,
         ))
     }
 
@@ -1545,10 +1555,11 @@ impl crate::event_source::EventSource for postgres::Connection {
 pub struct MempoolStore {
     #[allow(unused)]
     connection: Connection,
+    network: bitcoin::Network,
 }
 
 impl MempoolStore {
-    pub fn new(url: String) -> Result<Self> {
+    pub fn new(url: String, network: bitcoin::Network) -> Result<Self> {
         let connection = establish_connection(&url);
         IndexerStore::init(&connection)?;
 
@@ -1558,7 +1569,7 @@ impl MempoolStore {
             bail!("Indexer still in bulk mode. Finish initial indexing, or force the mode change");
         }
 
-        Ok(Self { connection })
+        Ok(Self { connection, network })
     }
 
     fn insert_tx_data(
@@ -1576,6 +1587,7 @@ impl MempoolStore {
             &mut output_q,
             &mut input_q,
             Mode::Normal, // we can't be running in any other mode
+            self.network,
             utxo_map,
         );
 
