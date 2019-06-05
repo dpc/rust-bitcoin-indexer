@@ -118,14 +118,28 @@ CREATE OR REPLACE VIEW tx_with_block AS
   SELECT * FROM tx_maybe_with_block WHERE block_hash_id IS NOT NULL;
 
 -- txes in the mempool
--- it does ignore extinct blocks
+-- select all txes that have null `current_height`, and which outputs were not used by any other tx yet
+CREATE OR REPLACE VIEW tx_hash_ids_in_mempool AS
+  SELECT
+    tx.hash_id
+  FROM tx
+  JOIN input ON input.tx_hash_id = tx.hash_id
+  LEFT JOIN tx AS other_tx ON (other_tx.hash_id = input.tx_hash_id AND other_tx.hash_id <> tx.hash_id AND other_tx.current_height IS NOT NULL)
+  WHERE tx.current_height IS NULL
+  GROUP BY tx.hash_id
+  HAVING count(other_tx.hash_id) = 0;
 CREATE OR REPLACE VIEW tx_in_mempool AS
-  select
-    tx_maybe_with_block.*
-  FROM tx_maybe_with_block
-  JOIN output on output.tx_hash_id = tx_maybe_with_block.hash_id
-  left join input on input.output_tx_hash_id = output.tx_hash_id 
-  where current_height IS NULL AND input.output_tx_hash_id IS NULL;
+  SELECT
+    *
+  FROM tx
+  WHERE
+    hash_id IN (SELECT * FROM tx_hash_ids_in_mempool);
+CREATE OR REPLACE VIEW tx_with_hash_in_mempool AS
+  SELECT
+    *
+  FROM tx_with_hash
+  WHERE
+    hash_id IN (SELECT * FROM tx_hash_ids_in_mempool);
 
 CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
