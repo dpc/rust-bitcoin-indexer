@@ -75,6 +75,16 @@ CREATE OR REPLACE FUNCTION reverse_bytes(bytes bytea) RETURNS bytea AS
 'SELECT reverse_bytes_iter(bytes, octet_length(bytes)-1, octet_length(bytes)/2, 0)'
 LANGUAGE SQL IMMUTABLE;
 
+CREATE OR REPLACE VIEW tx_with_hash AS
+  SELECT *,
+  reverse_bytes(hash_id || hash_rest) AS hash
+  FROM tx;
+
+CREATE OR REPLACE VIEW block_with_hash AS
+  SELECT *,
+  reverse_bytes(hash_id || hash_rest) AS hash
+  FROM block;
+
 -- tx joined all the way to the block
 -- NOTE: there might be from 0 (NULL data),
 -- to many blocks which happaned to include the tx (extinct blocks)
@@ -103,9 +113,11 @@ CREATE OR REPLACE VIEW tx_with_block AS
 -- it does ignore extinct blocks
 CREATE OR REPLACE VIEW tx_in_mempool AS
   select
-    *
+    tx_maybe_with_block.*
   FROM tx_maybe_with_block
-  where tx_maybe_with_block.mempool_ts IS NOT NULL AND (tx_maybe_with_block.block_hash_id IS NULL OR tx_maybe_with_block.block_extinct = true);
+  JOIN output on output.tx_hash_id = tx_maybe_with_block.hash_id
+  left join input on input.output_tx_hash_id = output.tx_hash_id 
+  where current_height IS NULL AND input.output_tx_hash_id IS NULL;
 
 CREATE OR REPLACE VIEW address_balance AS
   SELECT address, SUM(
@@ -154,8 +166,8 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
 --
 
 ANALYZE block;
-ANALYZE tx;
 ANALYZE block_tx;
+ANALYZE tx;
 ANALYZE output;
 ANALYZE input;
 

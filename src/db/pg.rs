@@ -93,30 +93,45 @@ const SQL_HASH_ID_SIZE: usize = 16;
 struct SqlFormatter<'a> {
     out: &'a mut String,
     opening: &'static str,
-    mode: Mode,
     on_conflict: &'static str,
 
     count: usize,
 }
 
 impl<'a> SqlFormatter<'a> {
-    fn new(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
+
+    fn new_on_conflict_do_nothing_auto(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
         Self {
             out,
             opening,
-            mode,
+            count: 0,
+            on_conflict: if mode.is_bulk() { "" } else { "ON CONFLICT DO NOTHING" }
+        }
+    }
+
+    fn new_no_conflict_check(out: &'a mut String, opening: &'static str) -> Self {
+        Self {
+            out,
+            opening,
             count: 0,
             on_conflict: ""
         }
     }
 
-    fn new_update_current_height(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
+    fn new_on_conflict_do_nothing(out: &'a mut String, opening: &'static str) -> Self {
         Self {
             out,
             opening,
-            mode,
             count: 0,
-            on_conflict: if mode.is_bulk() {"" } else {"ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height"}
+            on_conflict: "ON CONFLICT DO NOTHING"
+        }
+    }
+    fn new_tx_on_conflict_update_current_height(out: &'a mut String, opening: &'static str) -> Self {
+        Self {
+            out,
+            opening,
+            count: 0,
+            on_conflict: "ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height"
         }
     }
     fn fmt_with(&mut self, f: impl FnOnce(&mut String)) {
@@ -139,12 +154,7 @@ impl<'a> SqlFormatter<'a> {
 
     fn flush(&mut self) {
         self.count = 0;
-        if !self.mode.is_bulk() {
-            self.out.write_str("ON CONFLICT DO NOTHING").unwrap();
-        } else {
-            self.out.write_str(self.on_conflict).unwrap();
-        }
-
+        self.out.write_str(self.on_conflict).unwrap();
         self.out.write_str(";").unwrap();
     }
 }
@@ -165,10 +175,10 @@ struct OutputFormatter<'a> {
 impl<'a> OutputFormatter<'a> {
     fn new(output_s: &'a mut String, mode: Mode, network: bitcoin::Network) -> Self {
         Self {
-            output: SqlFormatter::new(
+            output: SqlFormatter::new_on_conflict_do_nothing_auto(
                 output_s,
                 "INSERT INTO output(tx_hash_id, tx_idx, value, address)VALUES",
-                mode,
+                mode
             ),
             network
         }
@@ -197,12 +207,12 @@ struct InputFormatter<'a> {
 }
 
 impl<'a> InputFormatter<'a> {
-    fn new(input_s: &'a mut String, mode: Mode) -> Self {
+    fn new(input_s: &'a mut String, mode: Mode ) -> Self {
         Self {
-            input: SqlFormatter::new(
+            input: SqlFormatter::new_on_conflict_do_nothing_auto(
                 input_s,
                 "INSERT INTO input(output_tx_hash_id,output_tx_idx,tx_hash_id,has_witness)VALUES",
-                mode,
+                mode
             ),
         }
     }
@@ -227,10 +237,10 @@ struct BlockTxFormatter<'a> {
 impl<'a> BlockTxFormatter<'a> {
     fn new(block_tx_s: &'a mut String, mode: Mode) -> Self {
         Self {
-            block_tx: SqlFormatter::new(
+            block_tx: SqlFormatter::new_on_conflict_do_nothing_auto(
                 block_tx_s,
                 "INSERT INTO block_tx(block_hash_id, tx_hash_id)VALUES",
-                mode,
+                mode
             ),
         }
     }
@@ -257,7 +267,7 @@ struct TxFormatter<'a> {
 }
 
 impl<'a> TxFormatter<'a> {
-    fn new(
+    fn new_for_in_block(
         tx_s: &'a mut String,
         output_s: &'a mut String,
         input_s: &'a mut String,
@@ -266,11 +276,18 @@ impl<'a> TxFormatter<'a> {
         inputs_utxo_map: UtxoMap,
     ) -> Self {
         Self {
-            tx: SqlFormatter::new_update_current_height(
-                tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
-                mode,
-            ),
+            tx: if mode.is_bulk() {
+                SqlFormatter::new_no_conflict_check(
+                    tx_s,
+                    "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
+                )
+            } else {
+                SqlFormatter::new_tx_on_conflict_update_current_height(
+                    tx_s,
+                    "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
+                )
+            }
+            ,
             output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
@@ -278,19 +295,21 @@ impl<'a> TxFormatter<'a> {
         }
     }
 
-    fn new_from_mempool(
+    fn new_for_in_mempool(
         tx_s: &'a mut String,
         output_s: &'a mut String,
         input_s: &'a mut String,
-        mode: Mode,
         network: bitcoin::Network,
         inputs_utxo_map: UtxoMap,
     ) -> Self {
+        // We can only do mempool insert in the normal mode, because otherwise bulk
+        // inserts would cause conflicts, and in bulk mode we don't want indices to
+        // be able to prevent them.
+        let mode = Mode::Normal;
         Self {
-            tx: SqlFormatter::new(
+            tx: SqlFormatter::new_on_conflict_do_nothing(
                 tx_s,
                 "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height, mempool_ts) VALUES",
-                mode,
             ),
             output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
@@ -382,18 +401,17 @@ impl<'a> BlockFormatter<'a> {
         tx_ids: TxIdMap,
     ) -> Self {
         BlockFormatter {
-
-            event: SqlFormatter::new(
+            event: SqlFormatter::new_on_conflict_do_nothing_auto(
                 event_s,
                 "INSERT INTO event (block_hash_id) VALUES",
-                mode,
+                mode
             ),
-            block: SqlFormatter::new(
+            block: SqlFormatter::new_on_conflict_do_nothing_auto(
                 block_s,
                 "INSERT INTO block (hash_id, hash_rest, prev_hash_id, merkle_root, height, time) VALUES",
-                mode,
+                mode
             ),
-            tx_fmt: TxFormatter::new(
+            tx_fmt: TxFormatter::new_for_in_block(
                 tx_s,
                 output_s,
                 input_s,
@@ -403,7 +421,7 @@ impl<'a> BlockFormatter<'a> {
             ),
             block_tx_fmt: BlockTxFormatter::new(
                 block_tx_s,
-                mode,
+                mode
             ),
             tx_ids,
         }
@@ -1333,7 +1351,7 @@ impl IndexerStore {
 
         let first_different_height = first_different_height.unwrap_or(self.chain_block_count);
 
-        trace!("Reorg begining at {}H", first_different_height);
+        debug!("Reorg begining at {}H", first_different_height);
 
         transaction.execute(
             "INSERT INTO event (block_hash_id, revert) SELECT hash_id, true FROM block WHERE height >= $1 AND NOT extinct ORDER BY height DESC;",
@@ -1593,11 +1611,10 @@ impl MempoolStore {
         let mut output_q = String::new();
         let mut input_q = String::new();
 
-        let mut formatter = TxFormatter::new_from_mempool(
+        let mut formatter = TxFormatter::new_for_in_mempool(
             &mut tx_q,
             &mut output_q,
             &mut input_q,
-            Mode::Normal, // we can't be running in any other mode
             self.network,
             utxo_map,
         );

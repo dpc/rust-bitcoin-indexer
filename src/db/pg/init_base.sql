@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS tx (
   mempool_ts TIMESTAMP DEFAULT NULL, -- NULL if it was indexed from an indexed block
   fee BIGINT NOT NULL,
   locktime BIGINT NOT NULL,
-  current_height INT DEFAULT NULL, -- Warning: mutable! But useful enough to keep it: especialy useful for mempool queries
+  current_height INT, -- Warning: mutable! But useful enough to keep it: especialy useful for mempool queries
   size INT NOT NULL,
   weight INT NOT NULL,
   coinbase BOOLEAN NOT NULL,
