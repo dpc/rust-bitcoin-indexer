@@ -75,6 +75,14 @@ CREATE OR REPLACE FUNCTION reverse_bytes(bytes bytea) RETURNS bytea AS
 'SELECT reverse_bytes_iter(bytes, octet_length(bytes)-1, octet_length(bytes)/2, 0)'
 LANGUAGE SQL IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION hash_from_parts(hash_id bytea, hash_rest bytea) RETURNS bytea AS
+'SELECT reverse_bytes_iter(hash_id || hash_rest, octet_length(hash_id || hash_rest)-1, octet_length(hash_id || hash_rest)/2, 0)'
+LANGUAGE SQL IMMUTABLE;
+CREATE OR REPLACE FUNCTION hash_to_hash_id(hash bytea) RETURNS bytea AS
+'SELECT reverse_bytes(substring(hash, 17, 32))'
+LANGUAGE SQL IMMUTABLE;
+
+
 CREATE OR REPLACE VIEW tx_with_hash AS
   SELECT *,
   reverse_bytes(hash_id || hash_rest) AS hash
