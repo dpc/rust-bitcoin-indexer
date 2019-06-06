@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS block (
   indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now())),
   time BIGINT NOT NULL, -- time from the block itself
   height INT NOT NULL,
-  extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table (and maybe in the whole database)
+  extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table
   hash_id BYTEA NOT NULL UNIQUE PRIMARY KEY, -- the hash is split in two to save when referencing in other columns
   hash_rest BYTEA NOT NULL,
   prev_hash_id BYTEA NOT NULL,
@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS tx (
   fee BIGINT NOT NULL,
   locktime BIGINT NOT NULL,
   current_height INT, -- Warning: mutable! But useful enough to keep it: especialy useful for mempool queries
-  size INT NOT NULL,
   weight INT NOT NULL,
   coinbase BOOLEAN NOT NULL,
   hash_id BYTEA NOT NULL,

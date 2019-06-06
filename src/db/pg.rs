@@ -279,12 +279,12 @@ impl<'a> TxFormatter<'a> {
             tx: if mode.is_bulk() {
                 SqlFormatter::new_no_conflict_check(
                     tx_s,
-                    "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
+                    "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height) VALUES",
                 )
             } else {
                 SqlFormatter::new_tx_on_conflict_update_current_height(
                     tx_s,
-                    "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height) VALUES",
+                    "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height) VALUES",
                 )
             }
             ,
@@ -309,7 +309,7 @@ impl<'a> TxFormatter<'a> {
         Self {
             tx: SqlFormatter::new_on_conflict_do_nothing(
                 tx_s,
-                "INSERT INTO tx (hash_id, hash_rest, size, weight, fee, locktime, coinbase, current_height, mempool_ts) VALUES",
+                "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height, mempool_ts) VALUES",
             ),
             output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
@@ -329,9 +329,7 @@ impl<'a> TxFormatter<'a> {
             let weight = tx.get_weight();
 
             s.write_fmt(format_args!(
-                "'::bytea,{},{},{},{},{},{}",
-                /* TODO: https://github.com/rust-bitcoin/rust-bitcoin/issues/266 */
-                weight / 4,
+                "'::bytea,{},{},{},{},{}",
                 weight,
                 fee,
                 tx.lock_time,
