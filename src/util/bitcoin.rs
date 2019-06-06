@@ -3,7 +3,7 @@ use bitcoin::util::address;
 use common_failures::prelude::*;
 use failure::bail;
 
-pub fn network_from_str(s : &str) -> Result<bitcoin::Network> {
+pub fn network_from_str(s: &str) -> Result<bitcoin::Network> {
     Ok(match s {
         "main" => bitcoin::Network::Bitcoin,
         "test" => bitcoin::Network::Testnet,

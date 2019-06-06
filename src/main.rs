@@ -22,8 +22,10 @@ impl Indexer {
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);
         let node_starting_chainhead_height = rpc.get_block_count()? as BlockHeight;
-        let network = bitcoin_indexer::util::bitcoin::network_from_str(&rpc.get_blockchain_info()?.chain)?;
-        let mut db = db::pg::IndexerStore::new(config.db_url, node_starting_chainhead_height, network)?;
+        let network =
+            bitcoin_indexer::util::bitcoin::network_from_str(&rpc.get_blockchain_info()?.chain)?;
+        let mut db =
+            db::pg::IndexerStore::new(config.db_url, node_starting_chainhead_height, network)?;
         info!("Node chain-head at {}H", node_starting_chainhead_height);
 
         Ok(Self {

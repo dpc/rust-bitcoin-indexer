@@ -99,13 +99,20 @@ struct SqlFormatter<'a> {
 }
 
 impl<'a> SqlFormatter<'a> {
-
-    fn new_on_conflict_do_nothing_auto(out: &'a mut String, opening: &'static str, mode: Mode) -> Self {
+    fn new_on_conflict_do_nothing_auto(
+        out: &'a mut String,
+        opening: &'static str,
+        mode: Mode,
+    ) -> Self {
         Self {
             out,
             opening,
             count: 0,
-            on_conflict: if mode.is_bulk() { "" } else { "ON CONFLICT DO NOTHING" }
+            on_conflict: if mode.is_bulk() {
+                ""
+            } else {
+                "ON CONFLICT DO NOTHING"
+            },
         }
     }
 
@@ -114,7 +121,7 @@ impl<'a> SqlFormatter<'a> {
             out,
             opening,
             count: 0,
-            on_conflict: ""
+            on_conflict: "",
         }
     }
 
@@ -123,15 +130,19 @@ impl<'a> SqlFormatter<'a> {
             out,
             opening,
             count: 0,
-            on_conflict: "ON CONFLICT DO NOTHING"
+            on_conflict: "ON CONFLICT DO NOTHING",
         }
     }
-    fn new_tx_on_conflict_update_current_height(out: &'a mut String, opening: &'static str) -> Self {
+    fn new_tx_on_conflict_update_current_height(
+        out: &'a mut String,
+        opening: &'static str,
+    ) -> Self {
         Self {
             out,
             opening,
             count: 0,
-            on_conflict: "ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height"
+            on_conflict:
+                "ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height",
         }
     }
     fn fmt_with(&mut self, f: impl FnOnce(&mut String)) {
@@ -178,9 +189,9 @@ impl<'a> OutputFormatter<'a> {
             output: SqlFormatter::new_on_conflict_do_nothing_auto(
                 output_s,
                 "INSERT INTO output(tx_hash_id, tx_idx, value, address)VALUES",
-                mode
+                mode,
             ),
-            network
+            network,
         }
     }
 
@@ -207,12 +218,12 @@ struct InputFormatter<'a> {
 }
 
 impl<'a> InputFormatter<'a> {
-    fn new(input_s: &'a mut String, mode: Mode ) -> Self {
+    fn new(input_s: &'a mut String, mode: Mode) -> Self {
         Self {
             input: SqlFormatter::new_on_conflict_do_nothing_auto(
                 input_s,
                 "INSERT INTO input(output_tx_hash_id,output_tx_idx,tx_hash_id,has_witness)VALUES",
-                mode
+                mode,
             ),
         }
     }
@@ -240,7 +251,7 @@ impl<'a> BlockTxFormatter<'a> {
             block_tx: SqlFormatter::new_on_conflict_do_nothing_auto(
                 block_tx_s,
                 "INSERT INTO block_tx(block_hash_id, tx_hash_id)VALUES",
-                mode
+                mode,
             ),
         }
     }
@@ -286,8 +297,7 @@ impl<'a> TxFormatter<'a> {
                     tx_s,
                     "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height) VALUES",
                 )
-            }
-            ,
+            },
             output_fmt: OutputFormatter::new(output_s, mode, network),
             input_fmt: InputFormatter::new(input_s, mode),
             inputs_utxo_map,
@@ -318,7 +328,13 @@ impl<'a> TxFormatter<'a> {
         }
     }
 
-    fn fmt_one(&mut self, block_height: Option<BlockHeight>, tx: &bitcoin::Transaction, tx_id: &Sha256dHash, fee: u64) {
+    fn fmt_one(
+        &mut self,
+        block_height: Option<BlockHeight>,
+        tx: &bitcoin::Transaction,
+        tx_id: &Sha256dHash,
+        fee: u64,
+    ) {
         let from_mempool = self.from_mempool;
         self.tx.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
@@ -334,7 +350,9 @@ impl<'a> TxFormatter<'a> {
                 fee,
                 tx.lock_time,
                 tx.is_coin_base(),
-                block_height.map(|h| h.to_string()).unwrap_or_else(|| "NULL".into()),
+                block_height
+                    .map(|h| h.to_string())
+                    .unwrap_or_else(|| "NULL".into()),
             ))
             .unwrap();
             if from_mempool {
@@ -344,7 +362,12 @@ impl<'a> TxFormatter<'a> {
         });
     }
 
-    fn fmt(&mut self, block_height: Option<BlockHeight>, tx: &bitcoin::Transaction, tx_id: &TxHash) {
+    fn fmt(
+        &mut self,
+        block_height: Option<BlockHeight>,
+        tx: &bitcoin::Transaction,
+        tx_id: &TxHash,
+    ) {
         let is_coinbase = tx.is_coin_base();
 
         let fee = if tx.is_coin_base() {
@@ -564,6 +587,56 @@ impl UtxoSetCache {
         self.entries.insert(point, UtxoSetEntry { value });
     }
 
+    fn process_blocks(
+        &mut self,
+        conn: &Connection,
+        blocks: &[crate::BlockData],
+        tx_ids: &TxIdMap,
+    ) -> Result<UtxoMap> {
+        let (mut inputs_utxo_map, missing) = trace_time(
+            || {
+                self.insert_from_blocks(blocks, tx_ids);
+
+                Ok(self.consume_from_blocks(blocks))
+            },
+            |duration, _| debug!("Modified utxo_cache in {}ms", duration.as_millis()),
+        )?;
+
+        let fetched_missing = self.fetch_missing(&conn, &missing)?;
+
+        for (k, v) in fetched_missing.into_iter() {
+            inputs_utxo_map.insert(k, v);
+        }
+        Ok(inputs_utxo_map)
+    }
+
+    fn insert_from_blocks(&mut self, blocks: &[crate::BlockData], tx_ids: &TxIdMap) {
+        for block in blocks {
+            for (tx_i, tx) in block.data.txdata.iter().enumerate() {
+                for (idx, output) in tx.output.iter().enumerate() {
+                    let txid = &tx_ids[&(block.height, tx_i)];
+                    self.insert(
+                        HashIdOutPoint::from_tx_hash_and_idx(txid, idx as u32),
+                        output.value,
+                    );
+                }
+            }
+        }
+    }
+
+    fn consume_from_blocks(
+        &mut self,
+        blocks: &[crate::BlockData],
+    ) -> (UtxoMap, Vec<HashIdOutPoint>) {
+        self.consume(
+            blocks
+                .iter()
+                .flat_map(|block| &block.data.txdata)
+                .filter(|tx| !tx.is_coin_base())
+                .flat_map(|tx| &tx.input)
+                .map(|input| input.previous_output),
+        )
+    }
     /// Consume `outputs`
     ///
     /// Returns:
@@ -589,9 +662,9 @@ impl UtxoSetCache {
         (found, missing)
     }
 
-    fn fetch_missing(conn: &Connection, missing: &[HashIdOutPoint]) -> Result<UtxoMap> {
+    fn fetch_missing(&mut self, conn: &Connection, missing: &[HashIdOutPoint]) -> Result<UtxoMap> {
         if missing.is_empty() {
-            return Ok(HashMap::default());
+            return Ok(UtxoMap::new());
         }
 
         let missing_len = missing.len();
@@ -612,6 +685,7 @@ impl UtxoSetCache {
             },
         )?;
         assert_eq!(missing_len, out.len());
+
         Ok(out)
     }
 }
@@ -733,8 +807,47 @@ impl fmt::Display for Mode {
 
 type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
 
+fn tx_id_map_from_blocks(
+    blocks: &[crate::BlockData],
+    network: bitcoin::Network,
+) -> Result<TxIdMap> {
+    trace_time(
+        || {
+            Ok(blocks
+                .par_iter()
+                .flat_map(move |block| {
+                    block
+                        .data
+                        .txdata
+                        .par_iter()
+                        .enumerate()
+                        .map(move |(tx_i, tx)| {
+                            (
+                                block.height,
+                                tx_i,
+                                calculate_tx_id_with_workarounds(block, tx, network),
+                            )
+                        })
+                })
+                .map(|(h, tx_i, txid)| ((h, tx_i), txid))
+                .collect())
+        },
+        |duration, tx_ids: &TxIdMap| {
+            debug!(
+                "Calculated txids of {} txs in {}ms",
+                tx_ids.len(),
+                duration.as_millis()
+            )
+        },
+    )
+}
 impl AsyncInsertThread {
-    fn new(url: String, in_flight: Arc<Mutex<BlocksInFlight>>, mode: Mode, network: bitcoin::Network) -> Self {
+    fn new(
+        url: String,
+        in_flight: Arc<Mutex<BlocksInFlight>>,
+        mode: Mode,
+        network: bitcoin::Network,
+    ) -> Self {
         // We use only rendezvous (0-size) channels, to allow passing
         // work and parallelism, but without doing any buffering of
         // work in the channels. Buffered work does not
@@ -759,63 +872,9 @@ impl AsyncInsertThread {
                 let mut utxo_set_cache = UtxoSetCache::default();
 
                 while let Ok((batch_id, blocks)) = utxo_fetching_rx.recv() {
-                    let tx_ids: TxIdMap = trace_time(
-                        || {
-                            Ok(blocks
-                                .par_iter()
-                                .flat_map(move |block| {
-                                    block.data.txdata.par_iter().enumerate().map(
-                                        move |(tx_i, tx)| {
-                                            (
-                                                block.height,
-                                                tx_i,
-                                                calculate_tx_id_with_workarounds(block, tx, network),
-                                            )
-                                        },
-                                    )
-                                })
-                                .map(|(h, tx_i, txid)| ((h, tx_i), txid))
-                                .collect())
-                        },
-                        |duration, tx_ids: &TxIdMap| {
-                            debug!(
-                                "Calculated txids of {} txs in {}ms",
-                                tx_ids.len(),
-                                duration.as_millis()
-                            )
-                        },
-                    )?;
+                    let tx_ids: TxIdMap = tx_id_map_from_blocks(&blocks, network)?;
 
-                    let (mut inputs_utxo_map, missing) = trace_time(
-                        || {
-                            for block in &blocks {
-                                for (tx_i, tx) in block.data.txdata.iter().enumerate() {
-                                    for (idx, output) in tx.output.iter().enumerate() {
-                                        let txid = &tx_ids[&(block.height, tx_i)];
-                                        utxo_set_cache.insert(
-                                            HashIdOutPoint::from_tx_hash_and_idx(txid, idx as u32),
-                                            output.value,
-                                        );
-                                    }
-                                }
-                            }
-
-                            Ok(utxo_set_cache.consume(
-                                blocks
-                                    .iter()
-                                    .flat_map(|block| &block.data.txdata)
-                                    .filter(|tx| !tx.is_coin_base())
-                                    .flat_map(|tx| &tx.input)
-                                    .map(|input| input.previous_output),
-                            ))
-                        },
-                        |duration, _| debug!("Modified utxo_cache in {}ms", duration.as_millis()),
-                    )?;
-
-                    let missing = UtxoSetCache::fetch_missing(&conn, &missing)?;
-                    for (k, v) in missing.into_iter() {
-                        inputs_utxo_map.insert(k, v);
-                    }
+                    let inputs_utxo_map = utxo_set_cache.process_blocks(&conn, &blocks, &tx_ids)?;
 
                     query_fmt_tx
                         .send((batch_id, blocks, inputs_utxo_map, tx_ids))
@@ -985,7 +1044,11 @@ impl Drop for IndexerStore {
 }
 
 impl IndexerStore {
-    pub fn new(url: String, node_chain_head_height: BlockHeight, network: bitcoin::Network) -> Result<Self> {
+    pub fn new(
+        url: String,
+        node_chain_head_height: BlockHeight,
+        network: bitcoin::Network,
+    ) -> Result<Self> {
         let connection = establish_connection(&url);
         Self::init(&connection)?;
         let mode = Self::read_indexer_state(&connection)?;
@@ -1596,7 +1659,10 @@ impl MempoolStore {
             bail!("Indexer still in bulk mode. Finish initial indexing, or force the mode change");
         }
 
-        Ok(Self { connection, network })
+        Ok(Self {
+            connection,
+            network,
+        })
     }
 
     fn insert_tx_data(
