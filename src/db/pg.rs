@@ -272,7 +272,7 @@ struct TxFormatter<'a> {
     output_fmt: OutputFormatter<'a>,
     input_fmt: InputFormatter<'a>,
 
-    inputs_utxo_map: UtxoMap,
+    inputs_utxo_map: UtxoDetailsMap,
 
     from_mempool: bool,
 }
@@ -284,7 +284,7 @@ impl<'a> TxFormatter<'a> {
         input_s: &'a mut String,
         mode: Mode,
         network: bitcoin::Network,
-        inputs_utxo_map: UtxoMap,
+        inputs_utxo_map: UtxoDetailsMap,
     ) -> Self {
         Self {
             tx: if mode.is_bulk() {
@@ -310,7 +310,7 @@ impl<'a> TxFormatter<'a> {
         output_s: &'a mut String,
         input_s: &'a mut String,
         network: bitcoin::Network,
-        inputs_utxo_map: UtxoMap,
+        inputs_utxo_map: UtxoDetailsMap,
     ) -> Self {
         // We can only do mempool insert in the normal mode, because otherwise bulk
         // inserts would cause conflicts, and in bulk mode we don't want indices to
@@ -418,7 +418,7 @@ impl<'a> BlockFormatter<'a> {
         input_s: &'a mut String,
         mode: Mode,
         network: bitcoin::Network,
-        inputs_utxo_map: UtxoMap,
+        inputs_utxo_map: UtxoDetailsMap,
         tx_ids: TxIdMap,
     ) -> Self {
         BlockFormatter {
@@ -519,7 +519,7 @@ fn create_fetch_outputs_query<'a>(
 fn fetch_outputs<'a>(
     conn: &Connection,
     outputs: impl Iterator<Item = &'a HashIdOutPoint>,
-) -> Result<UtxoMap> {
+) -> Result<UtxoDetailsMap> {
     let mut out = HashMap::new();
     for q in create_fetch_outputs_query(outputs) {
         for row in &conn.query(&q, &[])? {
@@ -574,12 +574,12 @@ impl From<bitcoin::OutPoint> for HashIdOutPoint {
     }
 }
 
-type UtxoMap = HashMap<HashIdOutPoint, UtxoSetEntry>;
+type UtxoDetailsMap = HashMap<HashIdOutPoint, UtxoSetEntry>;
 
 #[derive(Default)]
 /// Cache of utxo set
 struct UtxoSetCache {
-    entries: UtxoMap,
+    entries: UtxoDetailsMap,
 }
 
 impl UtxoSetCache {
@@ -587,30 +587,37 @@ impl UtxoSetCache {
         self.entries.insert(point, UtxoSetEntry { value });
     }
 
+    /// Process utxos from new blocks
+    ///
+    /// Add all new outputs, remove all used inputs, fetch all missing
+    /// utxos from the db.
+    ///
+    /// Returns map of details of all spent outputs (for fee calculation).
     fn process_blocks(
         &mut self,
         conn: &Connection,
         blocks: &[crate::BlockData],
         tx_ids: &TxIdMap,
-    ) -> Result<UtxoMap> {
+    ) -> Result<UtxoDetailsMap> {
         let (mut inputs_utxo_map, missing) = trace_time(
             || {
-                self.insert_from_blocks(blocks, tx_ids);
+                self.insert_new_utxos_from_blocks(blocks, tx_ids);
 
-                Ok(self.consume_from_blocks(blocks))
+                Ok(self.consume_spent_utxos_from_blocks(blocks))
             },
             |duration, _| debug!("Modified utxo_cache in {}ms", duration.as_millis()),
         )?;
 
-        let fetched_missing = self.fetch_missing(&conn, &missing)?;
+        let fetched_missing = self.fetch_missing_utxos(&conn, &missing)?;
 
         for (k, v) in fetched_missing.into_iter() {
             inputs_utxo_map.insert(k, v);
         }
+
         Ok(inputs_utxo_map)
     }
 
-    fn insert_from_blocks(&mut self, blocks: &[crate::BlockData], tx_ids: &TxIdMap) {
+    fn insert_new_utxos_from_blocks(&mut self, blocks: &[crate::BlockData], tx_ids: &TxIdMap) {
         for block in blocks {
             for (tx_i, tx) in block.data.txdata.iter().enumerate() {
                 for (idx, output) in tx.output.iter().enumerate() {
@@ -624,11 +631,11 @@ impl UtxoSetCache {
         }
     }
 
-    fn consume_from_blocks(
+    fn consume_spent_utxos_from_blocks(
         &mut self,
         blocks: &[crate::BlockData],
-    ) -> (UtxoMap, Vec<HashIdOutPoint>) {
-        self.consume(
+    ) -> (UtxoDetailsMap, Vec<HashIdOutPoint>) {
+        self.consume_spent_utxos(
             blocks
                 .iter()
                 .flat_map(|block| &block.data.txdata)
@@ -642,10 +649,10 @@ impl UtxoSetCache {
     /// Returns:
     /// * Mappings for Outputs that were found
     /// * Vector of outputs that were missing from the set
-    fn consume(
+    fn consume_spent_utxos(
         &mut self,
         outputs: impl Iterator<Item = bitcoin::OutPoint>,
-    ) -> (UtxoMap, Vec<HashIdOutPoint>) {
+    ) -> (UtxoDetailsMap, Vec<HashIdOutPoint>) {
         let mut found = HashMap::default();
         let mut missing = vec![];
 
@@ -662,9 +669,13 @@ impl UtxoSetCache {
         (found, missing)
     }
 
-    fn fetch_missing(&mut self, conn: &Connection, missing: &[HashIdOutPoint]) -> Result<UtxoMap> {
+    fn fetch_missing_utxos(
+        &self,
+        conn: &Connection,
+        missing: &[HashIdOutPoint],
+    ) -> Result<UtxoDetailsMap> {
         if missing.is_empty() {
-            return Ok(UtxoMap::new());
+            return Ok(UtxoDetailsMap::new());
         }
 
         let missing_len = missing.len();
@@ -690,6 +701,7 @@ impl UtxoSetCache {
     }
 }
 
+/// Convenient (arguably) function for reporting times of operations
 fn trace_time<T>(
     body: impl FnOnce() -> Result<T>,
     result: impl FnOnce(std::time::Duration, &T),
@@ -841,6 +853,47 @@ fn tx_id_map_from_blocks(
         },
     )
 }
+
+fn format_insert_quries(
+    blocks: &[crate::BlockData],
+    inputs_utxo_map: UtxoDetailsMap,
+    tx_ids: TxIdMap,
+    mode: Mode,
+    network: bitcoin::Network,
+) -> Result<Vec<String>> {
+    let mut event_q = String::new();
+    let mut block_q = String::new();
+    let mut block_tx_q = String::new();
+    let mut tx_q = String::new();
+    let mut output_q = String::new();
+    let mut input_q = String::new();
+
+    let mut formatter = BlockFormatter::new(
+        &mut event_q,
+        &mut block_q,
+        &mut block_tx_q,
+        &mut tx_q,
+        &mut output_q,
+        &mut input_q,
+        mode,
+        network,
+        inputs_utxo_map,
+        tx_ids,
+    );
+
+    trace_time(
+        || {
+            for block in blocks {
+                formatter.fmt(block);
+            }
+            drop(formatter);
+            Ok(())
+        },
+        |duration, _| debug!("Formatted queries in {}ms", duration.as_millis()),
+    )?;
+
+    Ok(vec![event_q, block_q, block_tx_q, tx_q, output_q, input_q])
+}
 impl AsyncInsertThread {
     fn new(
         url: String,
@@ -856,7 +909,7 @@ impl AsyncInsertThread {
         let (utxo_fetching_tx, utxo_fetching_rx) =
             crossbeam_channel::bounded::<(u64, Vec<crate::BlockData>)>(0);
         let (query_fmt_tx, query_fmt_rx) =
-            crossbeam_channel::bounded::<(u64, Vec<crate::BlockData>, UtxoMap, TxIdMap)>(0);
+            crossbeam_channel::bounded::<(u64, Vec<crate::BlockData>, UtxoDetailsMap, TxIdMap)>(0);
         let (writer_tx, writer_rx) = crossbeam_channel::bounded::<(
             u64,
             Vec<String>,
@@ -887,39 +940,10 @@ impl AsyncInsertThread {
         let query_fmt_thread = std::thread::spawn({
             fn_log_err("pg_query_fmt", move || {
                 while let Ok((batch_id, blocks, inputs_utxo_map, tx_ids)) = query_fmt_rx.recv() {
-                    let mut event_q = String::new();
-                    let mut block_q = String::new();
-                    let mut block_tx_q = String::new();
-                    let mut tx_q = String::new();
-                    let mut output_q = String::new();
-                    let mut input_q = String::new();
+                    let insert_queries =
+                        format_insert_quries(&blocks, inputs_utxo_map, tx_ids, mode, network)?;
 
-                    let mut formatter = BlockFormatter::new(
-                        &mut event_q,
-                        &mut block_q,
-                        &mut block_tx_q,
-                        &mut tx_q,
-                        &mut output_q,
-                        &mut input_q,
-                        mode,
-                        network,
-                        inputs_utxo_map,
-                        tx_ids,
-                    );
-
-                    let mut tx_len = 0;
-
-                    trace_time(
-                        || {
-                            for block in &blocks {
-                                tx_len += block.data.txdata.len();
-                                formatter.fmt(block);
-                            }
-                            drop(formatter);
-                            Ok(())
-                        },
-                        |duration, _| debug!("Formatted queries in {}ms", duration.as_millis()),
-                    )?;
+                    let tx_len = blocks.iter().map(|b| b.data.txdata.len()).sum();
 
                     let max_block_height = blocks
                         .iter()
@@ -931,7 +955,7 @@ impl AsyncInsertThread {
                     writer_tx
                         .send((
                             batch_id,
-                            vec![event_q, block_q, block_tx_q, tx_q, output_q, input_q],
+                            insert_queries,
                             blocks.into_iter().map(|block| block.id).collect(),
                             max_block_height,
                             tx_len,
@@ -1669,7 +1693,7 @@ impl MempoolStore {
         &mut self,
         tx_id: &TxHash,
         tx: &bitcoin::Transaction,
-        utxo_map: UtxoMap,
+        utxo_map: UtxoDetailsMap,
     ) -> Result<()> {
         let mut tx_q = String::new();
         let mut output_q = String::new();
