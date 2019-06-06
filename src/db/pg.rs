@@ -136,24 +136,32 @@ fn hash_id_and_rest_to_hash(id_and_rest: (Vec<u8>, Vec<u8>)) -> BlockHash {
 const SQL_INSERT_VALUES_SIZE: usize = 9000;
 const SQL_HASH_ID_SIZE: usize = 16;
 
-struct SqlFormatter<'a> {
+/// Multiple-value INSERT SQL query formatter
+///
+/// It formats SQL query inserting
+/// up to `SQL_INSERT_VALUES_SIZE` values at a time
+/// in the `out` String.
+///
+/// Each insert starts with a custom `opening` and can end with
+/// custom conflict handling (for immutability)
+struct MultiValueSqlFormatter<'a> {
     out: &'a mut String,
     opening: &'static str,
     on_conflict: &'static str,
 
-    count: usize,
+    query_values_count: usize,
 }
 
-impl<'a> SqlFormatter<'a> {
+impl<'a> MultiValueSqlFormatter<'a> {
     fn new_on_conflict_do_nothing_auto(
         out: &'a mut String,
         opening: &'static str,
         mode: Mode,
     ) -> Self {
-        Self {
+        MultiValueSqlFormatter {
             out,
             opening,
-            count: 0,
+            query_values_count: 0,
             on_conflict: if mode.is_bulk() {
                 ""
             } else {
@@ -163,76 +171,77 @@ impl<'a> SqlFormatter<'a> {
     }
 
     fn new_no_conflict_check(out: &'a mut String, opening: &'static str) -> Self {
-        Self {
+        MultiValueSqlFormatter {
             out,
             opening,
-            count: 0,
+            query_values_count: 0,
             on_conflict: "",
         }
     }
 
     fn new_on_conflict_do_nothing(out: &'a mut String, opening: &'static str) -> Self {
-        Self {
+        MultiValueSqlFormatter {
             out,
             opening,
-            count: 0,
+            query_values_count: 0,
             on_conflict: "ON CONFLICT DO NOTHING",
         }
     }
+
     fn new_tx_on_conflict_update_current_height(
         out: &'a mut String,
         opening: &'static str,
     ) -> Self {
-        Self {
+        MultiValueSqlFormatter {
             out,
             opening,
-            count: 0,
+            query_values_count: 0,
             on_conflict:
                 "ON CONFLICT (hash_id) DO UPDATE SET current_height = EXCLUDED.current_height",
         }
     }
     fn fmt_with(&mut self, f: impl FnOnce(&mut String)) {
-        self.maybe_flush();
-        if self.count == 0 {
+        self.maybe_terminate_query();
+        if self.query_values_count == 0 {
             self.out.write_str(self.opening).unwrap();
         } else {
             self.out.write_str(",").unwrap();
         }
 
         f(self.out);
-        self.count += 1;
+        self.query_values_count += 1;
     }
 
-    fn maybe_flush(&mut self) {
-        if self.count > SQL_INSERT_VALUES_SIZE {
-            self.flush();
+    fn maybe_terminate_query(&mut self) {
+        if self.query_values_count > SQL_INSERT_VALUES_SIZE {
+            self.terminate_query();
         }
     }
 
-    fn flush(&mut self) {
-        self.count = 0;
+    fn terminate_query(&mut self) {
+        self.query_values_count = 0;
         self.out.write_str(self.on_conflict).unwrap();
         self.out.write_str(";").unwrap();
     }
 }
 
-impl<'a> Drop for SqlFormatter<'a> {
+impl<'a> Drop for MultiValueSqlFormatter<'a> {
     fn drop(&mut self) {
-        if self.count > 0 {
-            self.flush();
+        if self.query_values_count > 0 {
+            self.terminate_query();
         }
     }
 }
 
 struct OutputFormatter<'a> {
-    output: SqlFormatter<'a>,
+    output: MultiValueSqlFormatter<'a>,
     network: bitcoin::Network,
 }
 
 impl<'a> OutputFormatter<'a> {
     fn new(output_s: &'a mut String, mode: Mode, network: bitcoin::Network) -> Self {
         Self {
-            output: SqlFormatter::new_on_conflict_do_nothing_auto(
+            output: MultiValueSqlFormatter::new_on_conflict_do_nothing_auto(
                 output_s,
                 "INSERT INTO output(tx_hash_id, tx_idx, value, address)VALUES",
                 mode,
@@ -260,13 +269,13 @@ impl<'a> OutputFormatter<'a> {
 }
 
 struct InputFormatter<'a> {
-    input: SqlFormatter<'a>,
+    input: MultiValueSqlFormatter<'a>,
 }
 
 impl<'a> InputFormatter<'a> {
     fn new(input_s: &'a mut String, mode: Mode) -> Self {
         Self {
-            input: SqlFormatter::new_on_conflict_do_nothing_auto(
+            input: MultiValueSqlFormatter::new_on_conflict_do_nothing_auto(
                 input_s,
                 "INSERT INTO input(output_tx_hash_id,output_tx_idx,tx_hash_id,has_witness)VALUES",
                 mode,
@@ -288,13 +297,13 @@ impl<'a> InputFormatter<'a> {
 }
 
 struct BlockTxFormatter<'a> {
-    block_tx: SqlFormatter<'a>,
+    block_tx: MultiValueSqlFormatter<'a>,
 }
 
 impl<'a> BlockTxFormatter<'a> {
     fn new(block_tx_s: &'a mut String, mode: Mode) -> Self {
         Self {
-            block_tx: SqlFormatter::new_on_conflict_do_nothing_auto(
+            block_tx: MultiValueSqlFormatter::new_on_conflict_do_nothing_auto(
                 block_tx_s,
                 "INSERT INTO block_tx(block_hash_id, tx_hash_id)VALUES",
                 mode,
@@ -312,8 +321,9 @@ impl<'a> BlockTxFormatter<'a> {
         });
     }
 }
+
 struct TxFormatter<'a> {
-    tx: SqlFormatter<'a>,
+    tx: MultiValueSqlFormatter<'a>,
 
     output_fmt: OutputFormatter<'a>,
     input_fmt: InputFormatter<'a>,
@@ -334,12 +344,12 @@ impl<'a> TxFormatter<'a> {
     ) -> Self {
         Self {
             tx: if mode.is_bulk() {
-                SqlFormatter::new_no_conflict_check(
+                MultiValueSqlFormatter::new_no_conflict_check(
                     tx_s,
                     "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height) VALUES",
                 )
             } else {
-                SqlFormatter::new_tx_on_conflict_update_current_height(
+                MultiValueSqlFormatter::new_tx_on_conflict_update_current_height(
                     tx_s,
                     "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height) VALUES",
                 )
@@ -363,7 +373,7 @@ impl<'a> TxFormatter<'a> {
         // be able to prevent them.
         let mode = Mode::Normal;
         Self {
-            tx: SqlFormatter::new_on_conflict_do_nothing(
+            tx: MultiValueSqlFormatter::new_on_conflict_do_nothing(
                 tx_s,
                 "INSERT INTO tx (hash_id, hash_rest, weight, fee, locktime, coinbase, current_height, mempool_ts) VALUES",
             ),
@@ -446,8 +456,8 @@ impl<'a> TxFormatter<'a> {
 }
 
 struct BlockFormatter<'a> {
-    event: SqlFormatter<'a>,
-    block: SqlFormatter<'a>,
+    event: MultiValueSqlFormatter<'a>,
+    block: MultiValueSqlFormatter<'a>,
 
     tx_fmt: TxFormatter<'a>,
     block_tx_fmt: BlockTxFormatter<'a>,
@@ -468,12 +478,12 @@ impl<'a> BlockFormatter<'a> {
         tx_ids: TxIdMap,
     ) -> Self {
         BlockFormatter {
-            event: SqlFormatter::new_on_conflict_do_nothing_auto(
+            event: MultiValueSqlFormatter::new_on_conflict_do_nothing_auto(
                 event_s,
                 "INSERT INTO event (block_hash_id) VALUES",
                 mode
             ),
-            block: SqlFormatter::new_on_conflict_do_nothing_auto(
+            block: MultiValueSqlFormatter::new_on_conflict_do_nothing_auto(
                 block_s,
                 "INSERT INTO block (hash_id, hash_rest, prev_hash_id, merkle_root, height, time) VALUES",
                 mode
@@ -586,6 +596,7 @@ struct UtxoSetEntry {
     value: u64,
 }
 
+/// `OutPoint` but with tx_hash trimmed to be just `HashId`
 #[derive(Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 struct HashIdOutPoint {
     tx_hash_id: Vec<u8>,
@@ -620,8 +631,8 @@ impl From<bitcoin::OutPoint> for HashIdOutPoint {
 
 type UtxoDetailsMap = HashMap<HashIdOutPoint, UtxoSetEntry>;
 
-#[derive(Default)]
 /// Cache of utxo set
+#[derive(Default)]
 struct UtxoSetCache {
     entries: UtxoDetailsMap,
 }
@@ -792,10 +803,10 @@ fn commit_atomic_bulk_insert_sql(
 
 type BlocksInFlight = HashSet<BlockHash>;
 
-/// Insertion Worker Thread
+/// Asynchronous block data insertion worker
 ///
 /// Reponsible for actually inserting data into the db.
-struct AsyncInsertThread {
+struct AsyncBlockInsertWorker {
     tx: Option<crossbeam_channel::Sender<(u64, Vec<crate::BlockData>)>>,
     utxo_fetching_thread: Option<std::thread::JoinHandle<Result<()>>>,
     query_fmt_thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -860,6 +871,10 @@ impl fmt::Display for Mode {
     }
 }
 
+/// Map block height and position in a block to `BlockHash`
+///
+/// Mainly used so that we don't have to recalculate txids many times
+/// (it's quite expensive).
 type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
 
 fn tx_id_map_from_blocks(
@@ -937,7 +952,7 @@ fn fmt_insert_blockdata_sql(
 
     Ok(vec![event_q, block_q, block_tx_q, tx_q, output_q, input_q])
 }
-impl AsyncInsertThread {
+impl AsyncBlockInsertWorker {
     fn new(
         url: String,
         in_flight: Arc<Mutex<BlocksInFlight>>,
@@ -1057,7 +1072,7 @@ impl AsyncInsertThread {
             })
         });
 
-        AsyncInsertThread {
+        AsyncBlockInsertWorker {
             tx: Some(utxo_fetching_tx),
             utxo_fetching_thread: Some(utxo_fetching_thread),
             query_fmt_thread: Some(query_fmt_thread),
@@ -1066,7 +1081,7 @@ impl AsyncInsertThread {
     }
 }
 
-impl Drop for AsyncInsertThread {
+impl Drop for AsyncBlockInsertWorker {
     fn drop(&mut self) {
         drop(self.tx.take());
 
@@ -1087,7 +1102,7 @@ impl Drop for AsyncInsertThread {
 pub struct IndexerStore {
     url: String,
     connection: pg::Connection,
-    pipeline: Option<AsyncInsertThread>,
+    pipeline: Option<AsyncBlockInsertWorker>,
     batch: Vec<crate::BlockData>,
     batch_txs_total: u64,
     batch_id: u64,
@@ -1253,7 +1268,7 @@ impl IndexerStore {
 
     fn start_workers(&mut self) {
         debug!("Starting DB pipeline workers");
-        self.pipeline = Some(AsyncInsertThread::new(
+        self.pipeline = Some(AsyncBlockInsertWorker::new(
             self.url.clone(),
             self.in_flight.clone(),
             self.mode,
