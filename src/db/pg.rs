@@ -1,4 +1,24 @@
 //! Postgres bitcoin blockchain
+//!
+//! ## Why is this code so big & complex?
+//!
+//! ### Performance
+//!
+//! Initiall indexing of the whole Bitcoin history can take a lot of time.
+//! For the indexer to be practical initial sync needs to be fast.. That's why all the
+//! tricks possible are used:
+//!
+//! * we keep track of `mode` and sometimes do thing differently depending on it
+//! * schema is being managed to build most indices only after all the initial data has been indexed
+//! * we resort to building raw SQL queries because multi-value `INSERT`s are absolutely the fastest insert method
+//! * this is generally OK, because all the data here is trusted
+//!
+//! ### Data consistency
+//!
+//! Shutting down, crashes, etc. should leave the data in a consistent state.
+//! Indexer guarantees that reorgs are atomic - one will never observe chain shrinking / in the middle of a reorg.
+//! We heavily rely on transactions.
+//!
 use log::{debug, error, info, trace};
 
 use super::*;
@@ -22,6 +42,7 @@ use std::{
 
 type BlockHeightSigned = i32;
 
+/// Either `Connection` or `Transaction` for the code that needs to be generic over it
 trait GenericConnection {
     fn query<'a>(&'a self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows>;
 }
@@ -38,6 +59,8 @@ impl<'a> GenericConnection for pg::Transaction<'a> {
     }
 }
 
+
+/// Estabilish connection with the DB
 pub fn establish_connection(url: &str) -> pg::Connection {
     loop {
         match pg::Connection::connect(url, pg::TlsMode::None) {
