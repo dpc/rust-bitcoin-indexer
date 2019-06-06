@@ -1,10 +1,17 @@
+//! Postgres bitcoin blockchain
 use log::{debug, error, info, trace};
 
 use super::*;
 use crate::{BlockHash, BlockHeight};
 use hex::ToHex;
 use itertools::Itertools;
-use postgres::{Connection, TlsMode};
+
+/// shorter `postgres` crate import names to just `pg::X`
+mod pg {
+    pub use postgres::{rows::Rows, transaction::Transaction, types::ToSql, Connection, TlsMode};
+    pub type Result<T> = std::result::Result<T, postgres::error::Error>;
+}
+
 use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -15,9 +22,25 @@ use std::{
 
 type BlockHeightSigned = i32;
 
-pub fn establish_connection(url: &str) -> Connection {
+trait GenericConnection {
+    fn query<'a>(&'a self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows>;
+}
+
+impl GenericConnection for pg::Connection {
+    fn query<'a>(&'a self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows> {
+        self.query(query, params)
+    }
+}
+
+impl<'a> GenericConnection for pg::Transaction<'a> {
+    fn query<'b>(&'b self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows> {
+        self.query(query, params)
+    }
+}
+
+pub fn establish_connection(url: &str) -> pg::Connection {
     loop {
-        match Connection::connect(url, TlsMode::None) {
+        match pg::Connection::connect(url, pg::TlsMode::None) {
             Err(e) => {
                 eprintln!("Error connecting to PG: {}", e);
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -487,9 +510,7 @@ impl<'a> BlockFormatter<'a> {
     }
 }
 
-fn create_fetch_outputs_query<'a>(
-    outputs: impl Iterator<Item = &'a HashIdOutPoint>,
-) -> Vec<String> {
+fn fmt_fetch_outputs_sql<'a>(outputs: impl Iterator<Item = &'a HashIdOutPoint>) -> Vec<String> {
     outputs
         .chunks(SQL_INSERT_VALUES_SIZE)
         .into_iter()
@@ -517,11 +538,11 @@ fn create_fetch_outputs_query<'a>(
 }
 
 fn fetch_outputs<'a>(
-    conn: &Connection,
+    conn: &GenericConnection,
     outputs: impl Iterator<Item = &'a HashIdOutPoint>,
 ) -> Result<UtxoDetailsMap> {
     let mut out = HashMap::new();
-    for q in create_fetch_outputs_query(outputs) {
+    for q in fmt_fetch_outputs_sql(outputs) {
         for row in &conn.query(&q, &[])? {
             out.insert(
                 HashIdOutPoint {
@@ -595,7 +616,7 @@ impl UtxoSetCache {
     /// Returns map of details of all spent outputs (for fee calculation).
     fn process_blocks(
         &mut self,
-        conn: &Connection,
+        conn: &GenericConnection,
         blocks: &[crate::BlockData],
         tx_ids: &TxIdMap,
     ) -> Result<UtxoDetailsMap> {
@@ -608,7 +629,7 @@ impl UtxoSetCache {
             |duration, _| debug!("Modified utxo_cache in {}ms", duration.as_millis()),
         )?;
 
-        let fetched_missing = self.fetch_missing_utxos(&conn, &missing)?;
+        let fetched_missing = self.fetch_missing_utxos(conn, &missing)?;
 
         for (k, v) in fetched_missing.into_iter() {
             inputs_utxo_map.insert(k, v);
@@ -671,7 +692,7 @@ impl UtxoSetCache {
 
     fn fetch_missing_utxos(
         &self,
-        conn: &Connection,
+        conn: &GenericConnection,
         missing: &[HashIdOutPoint],
     ) -> Result<UtxoDetailsMap> {
         if missing.is_empty() {
@@ -684,7 +705,7 @@ impl UtxoSetCache {
 
         trace_time(
             || {
-                out = fetch_outputs(&conn, missing.iter())?;
+                out = fetch_outputs(conn, missing.iter())?;
                 Ok(())
             },
             |duration, _| {
@@ -714,15 +735,14 @@ fn trace_time<T>(
     Ok(res)
 }
 
-fn execute_bulk_insert_queries(
-    conn: &Connection,
+fn commit_atomic_bulk_insert_sql(
+    transaction: pg::Transaction,
     name: &str,
     len: usize,
     batch_id: u64,
     queries: impl Iterator<Item = String>,
 ) -> Result<()> {
     let start = Instant::now();
-    let transaction = conn.transaction()?;
     for (i, s) in queries.enumerate() {
         trace_time(
             || Ok(transaction.batch_execute(&s)?),
@@ -854,7 +874,7 @@ fn tx_id_map_from_blocks(
     )
 }
 
-fn format_insert_quries(
+fn fmt_insert_blockdata_sql(
     blocks: &[crate::BlockData],
     inputs_utxo_map: UtxoDetailsMap,
     tx_ids: TxIdMap,
@@ -941,7 +961,7 @@ impl AsyncInsertThread {
             fn_log_err("pg_query_fmt", move || {
                 while let Ok((batch_id, blocks, inputs_utxo_map, tx_ids)) = query_fmt_rx.recv() {
                     let insert_queries =
-                        format_insert_quries(&blocks, inputs_utxo_map, tx_ids, mode, network)?;
+                        fmt_insert_blockdata_sql(&blocks, inputs_utxo_map, tx_ids, mode, network)?;
 
                     let tx_len = blocks.iter().map(|b| b.data.txdata.len()).sum();
 
@@ -952,11 +972,13 @@ impl AsyncInsertThread {
                         .expect("at least one block")
                         .height;
 
+                    let block_ids = blocks.into_iter().map(|block| block.id).collect();
+
                     writer_tx
                         .send((
                             batch_id,
                             insert_queries,
-                            blocks.into_iter().map(|block| block.id).collect(),
+                            block_ids,
                             max_block_height,
                             tx_len,
                         ))
@@ -974,8 +996,9 @@ impl AsyncInsertThread {
                 while let Ok((batch_id, queries, block_ids, max_block_height, tx_len)) =
                     writer_rx.recv()
                 {
-                    execute_bulk_insert_queries(
-                        &conn,
+                    let transaction = conn.transaction()?;
+                    commit_atomic_bulk_insert_sql(
+                        transaction,
                         "all block data",
                         block_ids.len(),
                         batch_id,
@@ -1040,7 +1063,7 @@ impl Drop for AsyncInsertThread {
 
 pub struct IndexerStore {
     url: String,
-    connection: Connection,
+    connection: pg::Connection,
     pipeline: Option<AsyncInsertThread>,
     batch: Vec<crate::BlockData>,
     batch_txs_total: u64,
@@ -1116,7 +1139,7 @@ impl IndexerStore {
             .map(|row| row.get::<_, bool>(0)))
     }
 
-    fn read_db_chain_current_block_count(conn: &Connection) -> Result<BlockHeight> {
+    fn read_db_chain_current_block_count(conn: &pg::Connection) -> Result<BlockHeight> {
         Ok(query_one_value_opt::<BlockHeightSigned>(
             conn,
             "SELECT max(height) FROM block WHERE extinct = FALSE",
@@ -1126,7 +1149,7 @@ impl IndexerStore {
         .unwrap_or(0))
     }
 
-    fn read_db_chain_block_count(conn: &Connection) -> Result<BlockHeight> {
+    fn read_db_chain_block_count(conn: &pg::Connection) -> Result<BlockHeight> {
         Ok(
             query_one_value_opt::<BlockHeightSigned>(conn, "SELECT max(height) FROM block", &[])?
                 .map(|i| i as u32 + 1)
@@ -1135,7 +1158,7 @@ impl IndexerStore {
     }
 
     fn read_db_block_hash_by_height(
-        conn: &Connection,
+        conn: &pg::Connection,
         height: BlockHeight,
     ) -> Result<Option<BlockHash>> {
         Ok(query_two_values::<Vec<u8>, Vec<u8>>(
@@ -1158,7 +1181,7 @@ impl IndexerStore {
         .map(hash_id_and_rest_to_hash))
     }
 
-    fn read_indexer_state(conn: &Connection) -> Result<Mode> {
+    fn read_indexer_state(conn: &pg::Connection) -> Result<Mode> {
         let state = conn.query("SELECT bulk_mode FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
             let is_bulk_mode = state.get(0);
@@ -1188,7 +1211,7 @@ impl IndexerStore {
         }
     }
 
-    fn init(conn: &Connection) -> Result<()> {
+    fn init(conn: &pg::Connection) -> Result<()> {
         info!("Creating initial db schema");
         conn.batch_execute(include_str!("pg/init_base.sql"))?;
         Ok(())
@@ -1496,13 +1519,25 @@ impl IndexerStore {
 
         assert!(!self.batch.is_empty());
 
-        // TODO: this is actually totally atomic reorg
-        // The whole insertion of new blocks has to be done in the same transaction
+        let blocks = std::mem::replace(&mut self.batch, vec![]);
 
-        transaction.commit()?;
+        let mut utxo_set_cache = UtxoSetCache::default();
+        let tx_ids: TxIdMap = tx_id_map_from_blocks(&blocks, self.network)?;
+        let inputs_utxo_map = utxo_set_cache.process_blocks(&transaction, &blocks, &tx_ids)?;
+
+        let block_count = blocks.iter().count();
+        let insert_queries =
+            fmt_insert_blockdata_sql(&blocks, inputs_utxo_map, tx_ids, self.mode, self.network)?;
+
+        commit_atomic_bulk_insert_sql(
+            transaction,
+            "all block data",
+            block_count,
+            0,
+            insert_queries.into_iter(),
+        )?;
 
         self.start_workers();
-        self.flush_batch()?;
 
         Ok(())
     }
@@ -1526,7 +1561,7 @@ where
 */
 
 fn query_two_values<T1, T2>(
-    conn: &Connection,
+    conn: &pg::Connection,
     q: &str,
     params: &[&dyn postgres::types::ToSql],
 ) -> Result<Option<(T1, T2)>>
@@ -1541,7 +1576,7 @@ where
         .map(|row| (row.get::<_, T1>(0), row.get::<_, T2>(1))))
 }
 fn query_one_value_opt<T>(
-    conn: &Connection,
+    conn: &pg::Connection,
     q: &str,
     params: &[&dyn postgres::types::ToSql],
 ) -> Result<Option<T>>
@@ -1668,7 +1703,7 @@ impl crate::event_source::EventSource for postgres::Connection {
 
 pub struct MempoolStore {
     #[allow(unused)]
-    connection: Connection,
+    connection: pg::Connection,
     network: bitcoin::Network,
 }
 
