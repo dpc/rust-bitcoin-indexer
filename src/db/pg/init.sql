@@ -13,14 +13,15 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 -- canceling protocol is used
 -- https://github.com/dpc/rust-bitcoin-indexer/wiki/How-to-interact-with-a-blockchain#canceling-protocol
 CREATE TABLE IF NOT EXISTS event (
+  indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now())),
   id BIGSERIAL NOT NULL UNIQUE PRIMARY KEY,
   revert BOOLEAN NOT NULL DEFAULT FALSE,
   block_hash_id BYTEA NOT NULL
 );
+CREATE INDEX IF NOT EXISTS event_indexed_ts ON event (indexed_ts);
 
 -- blocks: insert only
 CREATE TABLE IF NOT EXISTS block (
-  indexed_ts TIMESTAMP NOT NULL DEFAULT (timezone('utc', now())),
   time BIGINT NOT NULL, -- time from the block itself
   height INT NOT NULL,
   extinct BOOLEAN NOT NULL DEFAULT FALSE, -- this is the only mutable column in this table

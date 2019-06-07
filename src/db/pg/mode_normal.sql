@@ -106,9 +106,9 @@ CREATE OR REPLACE VIEW tx_maybe_with_block AS
   block.merkle_root AS block_merkle_root,
   block.extinct AS block_extinct,
   block.time AS block_time, -- unix time from header
-  block.indexed_ts AS block_indexed_ts,
+  (SELECT min(indexed_ts) FROM event WHERE block_hash_id = block.hash_id) AS block_indexed_ts,
   CASE WHEN tx.mempool_ts IS NULL THEN to_timestamp(block.time) ELSE tx.mempool_ts END AS ts, -- if we seen it first, mepool_ts, otherwise official ts from header
-  CASE WHEN tx.mempool_ts IS NULL THEN block.indexed_ts ELSE tx.mempool_ts END AS indexed_ts -- our indexed time - either of block, or from mempool
+  CASE WHEN tx.mempool_ts IS NULL THEN (SELECT min(indexed_ts) FROM event WHERE block_hash_id = block.hash_id) ELSE tx.mempool_ts END AS indexed_ts -- our indexed time - either of block, or from mempool
   FROM tx
   LEFT JOIN block_tx
     JOIN block ON block.hash_id = block_tx.block_hash_id
@@ -202,11 +202,11 @@ ALTER TABLE block SET (
   autovacuum_enabled = true, toast.autovacuum_enabled = true
 );
 
-ALTER TABLE tx SET (
+ALTER TABLE block_tx SET (
   autovacuum_enabled = true, toast.autovacuum_enabled = true
 );
 
-ALTER TABLE block_tx SET (
+ALTER TABLE tx SET (
   autovacuum_enabled = true, toast.autovacuum_enabled = true
 );
 

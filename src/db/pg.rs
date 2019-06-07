@@ -846,7 +846,7 @@ impl Mode {
 
     fn to_sql_query_str(self) -> &'static str {
         match self {
-            Mode::FreshBulk => include_str!("pg/mode_fresh.sql"),
+            Mode::FreshBulk => concat!(include_str!("pg/mode_fresh.sql"), include_str!("pg/init.sql")),
             Mode::Bulk => include_str!("pg/mode_bulk.sql"),
             Mode::Normal => include_str!("pg/mode_normal.sql"),
         }
@@ -1251,7 +1251,7 @@ impl IndexerStore {
 
     fn init(conn: &pg::Connection) -> Result<()> {
         info!("Creating initial db schema");
-        conn.batch_execute(include_str!("pg/init_base.sql"))?;
+        conn.batch_execute(include_str!("pg/init.sql"))?;
         Ok(())
     }
 
