@@ -6,6 +6,23 @@
 --
 -- Keys & indices
 --
+
+--- event
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_event_block_hash_id') THEN
+    ALTER TABLE event
+    ADD CONSTRAINT fk_event_block_hash_id FOREIGN KEY (block_hash_id)
+      REFERENCES block(hash_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
+
+--- block
+/* nothing atm */
+
+--- block_tx
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -18,6 +35,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS block_tx_tx_hash_id_block_hash_id ON block_tx 
 
 DO $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_block_tx_block_hash_id') THEN
+    ALTER TABLE block_tx
+    ADD CONSTRAINT fk_block_tx_block_hash_id FOREIGN KEY (block_hash_id)
+      REFERENCES block(hash_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
+
+--- tx
+DO $$
+BEGIN
   IF NOT EXISTS (
     SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'tx' AND constraint_type = 'PRIMARY KEY'
   ) THEN
@@ -25,12 +54,25 @@ BEGIN
   END IF;
 END $$;
 
+---- this can only be created after the PK on `tx` been created
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_block_tx_tx_hash_id') THEN
+      ALTER TABLE block_tx
+      ADD CONSTRAINT fk_block_tx_tx_hash_id FOREIGN KEY (tx_hash_id)
+          REFERENCES tx(hash_id)
+          DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS tx_hash_id ON tx (hash_id);
 CREATE INDEX IF NOT EXISTS tx_coinbase ON tx (coinbase);
 CREATE INDEX IF NOT EXISTS tx_mempool_ts ON tx (mempool_ts);
 CREATE INDEX IF NOT EXISTS tx_current_height ON tx (current_height);
 
-
+--- output
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -44,6 +86,19 @@ CREATE INDEX IF NOT EXISTS output_value_address ON output (value, address);
 
 DO $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_output_tx_hash_id') THEN
+    ALTER TABLE output
+    ADD CONSTRAINT fk_output_tx_hash_id FOREIGN KEY (tx_hash_id)
+      REFERENCES tx(hash_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
+
+
+--- input
+DO $$
+BEGIN
   IF NOT EXISTS (
     SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'input' AND constraint_type = 'PRIMARY KEY'
   ) THEN
@@ -52,6 +107,28 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS input_tx_hash_id ON input (tx_hash_id);
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_input_tx_hash_id') THEN
+    ALTER TABLE input
+    ADD CONSTRAINT fk_input_tx_hash_id FOREIGN KEY (tx_hash_id)
+      REFERENCES tx(hash_id)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
+
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_input_output') THEN
+    ALTER TABLE input
+    ADD CONSTRAINT fk_input_output FOREIGN KEY (output_tx_hash_id, output_tx_idx)
+      REFERENCES output(tx_hash_id, tx_idx)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END;
+$$;
 
 --
 -- Utilities

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS event (
   revert BOOLEAN NOT NULL DEFAULT FALSE,
   block_hash_id BYTEA NOT NULL
 );
-CREATE INDEX IF NOT EXISTS event_indexed_ts ON event (indexed_ts);
+CREATE UNIQUE INDEX IF NOT EXISTS event_indexed_ts ON event (indexed_ts, id);
 
 -- blocks: insert only
 CREATE TABLE IF NOT EXISTS block (
