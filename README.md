@@ -29,11 +29,6 @@ Status:
 * Indexing the blockchain works
 * Indexing mempool works
 
-# Support
-
-If you like and/or use this project, you can pay for it by sending Bitcoin to
-[33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93](bitcoin:33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93).
-
 ## Running
 
 Install Rust with https://rustup.rs
@@ -187,3 +182,9 @@ bitcoin-indexer=> select * from tx_in_mempool order by (fee/weight) desc limit 5
 ```
 
 and many more. Refer to `./src/db/pg/*.sql` files for good overview of the schema and utilities.
+
+# Support
+
+If you like and/or use this project, you can pay for it by sending Bitcoin to
+[33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93](bitcoin:33A9SwFHWEnwmFfgRfHu1GvSfCeDcABx93).
+
