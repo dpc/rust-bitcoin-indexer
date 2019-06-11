@@ -3,6 +3,8 @@
 -- **Important**:
 -- * all columns sorted by size to minimize padding (https://stackoverflow.com/questions/2966524/calculating-and-saving-space-in-postgresql/7431468#7431468)
 -- signgle record table to keep persistent indexer state
+
+-- indexer_state
 CREATE TABLE IF NOT EXISTS indexer_state (
   bulk_mode BOOLEAN NOT NULL
 );
