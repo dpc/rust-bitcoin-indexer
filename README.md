@@ -105,6 +105,7 @@ Tune your system for best performance too:
   eg. `chattr -R +C /var/lib/postgresql/9.6/`; On other FSes: disable barriers, align to SSD; you can
   mount your fs in more risky-mode for initial sync, and revert back to safe settings
   aftewards.
+* on my HDD ext4 `sudo tune2fs -o journal_data_writeback  /dev/<partition>` made a huge improvement.
 
 [perf-fs]: https://www.slideshare.net/fuzzycz/postgresql-on-ext4-xfs-btrfs-and-zfs
 [tune-psql]: https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql
@@ -122,6 +123,8 @@ For reference -  on my system, I get around 30k txs indexed per second:
 which leads to around 5 hours initial blockchain indexing time (current block height is around 577k)...
 and then just 4 additional hours to build indices.
 
+I suggest using `tx/s` metric to estimate completion.
+
 ### Run
 
 Now everything should be ready. Compile and run with:
@@ -136,14 +139,13 @@ After the initial full sync, you can also start mempool indexer:
 cargo run --release --bin mempool-indexer
 ```
 
-
 in a directory containing the `.env` file.
 
 #### More options
 
 You can use `--wipe-whole-db` to wipe the db. (to be removed in the future)
 
-For logging set env. var. `RUST_LOG` to `rust_bitcoin=info` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
+For logging set env. var. `RUST_LOG` to `bitcoin_indexer=info` or refer to https://docs.rs/env_logger/0.6.0/env_logger/.
 
 
 ### Some useful stuff that can be done already

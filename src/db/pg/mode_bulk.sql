@@ -55,8 +55,7 @@ BEGIN
   END IF;
 END $$;
 
-DROP INDEX IF EXISTS tx_hash_id;
-DROP INDEX IF EXISTS tx_coinbase;
+DROP INDEX IF EXISTS tx_coinbase_eq_true;
 DROP INDEX IF EXISTS tx_current_height;
 
 --- output
@@ -71,8 +70,8 @@ BEGIN
     ALTER TABLE output ADD PRIMARY KEY (tx_hash_id, tx_idx);
   END IF;
 END $$;
-DROP INDEX IF EXISTS output_address_value;
-DROP INDEX IF EXISTS output_value_address;
+DROP INDEX IF EXISTS output_address;
+DROP INDEX IF EXISTS output_value;
 
 DO $$
 BEGIN

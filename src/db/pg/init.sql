@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS event (
   revert BOOLEAN NOT NULL DEFAULT FALSE,
   block_hash_id BYTEA NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS event_indexed_ts ON event (indexed_ts, id);
+CREATE INDEX IF NOT EXISTS event_indexed_ts ON event USING brin (indexed_ts);
+CREATE INDEX IF NOT EXISTS event_block_hash_id ON event (block_hash_id);
 
 -- blocks: insert only
 CREATE TABLE IF NOT EXISTS block (
@@ -36,9 +37,10 @@ CREATE TABLE IF NOT EXISTS block (
 -- We always want these two, as a lot of logic is based
 -- on `block` table, and it's the smallest table overall,
 -- so it doesn't matter that much (perforamnce wise)
-CREATE INDEX IF NOT EXISTS block_height ON block (height);
-CREATE UNIQUE INDEX IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
-CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct);
+CREATE INDEX IF NOT EXISTS block_height ON block USING brin (height);
+-- would be nice if this was `USING brin`, but it can't do `UNIQUE` :/
+CREATE UNIQUE INDEX  IF NOT EXISTS block_height_for_not_extinct ON block (height) WHERE extinct = false;
+CREATE INDEX IF NOT EXISTS block_extinct ON block (extinct) WHERE extinct = true;
 
 
 -- block -> tx: insert only

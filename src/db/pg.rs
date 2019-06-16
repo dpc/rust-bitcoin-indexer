@@ -133,7 +133,7 @@ fn hash_id_and_rest_to_hash(id_and_rest: (Vec<u8>, Vec<u8>)) -> BlockHash {
     BlockHash::from_slice(&id).expect("a valid hash")
 }
 
-const SQL_INSERT_VALUES_SIZE: usize = 9000;
+const SQL_INSERT_VALUES_SIZE: usize = 30000;
 const SQL_HASH_ID_SIZE: usize = 16;
 
 /// Multiple-value INSERT SQL query formatter
@@ -1220,6 +1220,7 @@ impl IndexerStore {
     }
 
     fn read_indexer_state(conn: &pg::Connection) -> Result<Mode> {
+        trace!("Reading indexer state from the db");
         let state = conn.query("SELECT bulk_mode FROM indexer_state", &[])?;
         if let Some(state) = state.iter().next() {
             let is_bulk_mode = state.get(0);
@@ -1231,11 +1232,14 @@ impl IndexerStore {
                     .expect("A row from the db")
                     .get::<_, i64>(0);
                 if count == 0 {
+                    trace!("Indexer in fresh state");
                     Mode::FreshBulk
                 } else {
+                    trace!("Indexer in bulk state");
                     Mode::Bulk
                 }
             } else {
+                trace!("Indexer in normal state");
                 Mode::Normal
             };
 
@@ -1245,6 +1249,7 @@ impl IndexerStore {
                 "INSERT INTO indexer_state (bulk_mode) VALUES ($1)",
                 &[&true],
             )?;
+            trace!("Indexer in fresh state (on first run).");
             Ok(Mode::FreshBulk)
         }
     }

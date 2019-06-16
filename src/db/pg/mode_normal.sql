@@ -67,10 +67,9 @@ BEGIN
 END;
 $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS tx_hash_id ON tx (hash_id);
-CREATE INDEX IF NOT EXISTS tx_coinbase ON tx (coinbase);
-CREATE INDEX IF NOT EXISTS tx_mempool_ts ON tx (mempool_ts);
-CREATE INDEX IF NOT EXISTS tx_current_height ON tx (current_height);
+CREATE INDEX IF NOT EXISTS tx_coinbase_eq_true ON tx (coinbase) WHERE coinbase = true;
+CREATE INDEX IF NOT EXISTS tx_mempool_ts ON tx USING brin (mempool_ts);
+CREATE INDEX IF NOT EXISTS tx_current_height ON tx USING brin (current_height);
 
 --- output
 DO $$
@@ -81,8 +80,8 @@ BEGIN
     ALTER TABLE output ADD PRIMARY KEY (tx_hash_id, tx_idx);
   END IF;
 END $$;
-CREATE INDEX IF NOT EXISTS output_address_value ON output (address, value);
-CREATE INDEX IF NOT EXISTS output_value_address ON output (value, address);
+CREATE INDEX IF NOT EXISTS output_address ON output USING hash (address);
+CREATE INDEX IF NOT EXISTS output_value ON output (value);
 
 DO $$
 BEGIN
@@ -94,7 +93,6 @@ BEGIN
   END IF;
 END;
 $$;
-
 
 --- input
 DO $$
@@ -117,7 +115,6 @@ BEGIN
   END IF;
 END;
 $$;
-
 
 DO $$
 BEGIN
@@ -264,38 +261,47 @@ CREATE OR REPLACE VIEW address_balance_at_height AS
 -- Performance tuning
 --
 
-ANALYZE block;
-ANALYZE block_tx;
-ANALYZE tx;
-ANALYZE output;
-ANALYZE input;
+--- analyze once: only when switching from bulk mode for the first time
+DO $$
+BEGIN
+  IF  EXISTS (
+    SELECT bulk_mode FROM indexer_state WHERE bulk_mode = true
+  ) THEN
+    ANALYZE indexer_state;
+    ANALYZE block;
+    ANALYZE block_tx;
+    ANALYZE tx;
+    ANALYZE output;
+    ANALYZE input;
+  END IF;
+END $$;
 
--- enableautovacum: it might be useful anyway
+-- disable atovacum: we don't delete data anyway
 ALTER TABLE event SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE block SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE block_tx SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE tx SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE output SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE input SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 
 ALTER TABLE input SET (
-  autovacuum_enabled = true, toast.autovacuum_enabled = true
+  autovacuum_enabled = false, toast.autovacuum_enabled = false
 );
 

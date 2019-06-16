@@ -6,6 +6,7 @@ use bitcoin_indexer::{
 };
 use bitcoincore_rpc::RpcApi;
 use std::{collections::HashSet, env};
+use log::trace;
 
 use common_failures::quick_main;
 
@@ -20,6 +21,7 @@ fn run() -> Result<()> {
     let rpc = rpc_info.to_rpc_client()?;
     let network =
         bitcoin_indexer::util::bitcoin::network_from_str(&rpc.get_blockchain_info()?.chain)?;
+    trace!("Creating mempool store");
     let mut db = db::pg::MempoolStore::new(db_url, network)?;
 
     let mut done = HashSet::new();
@@ -32,12 +34,14 @@ fn run() -> Result<()> {
         if done.len() > 50_000 {
             done.clear();
         }
+        trace!("Checking mempool");
         for tx_id in rpc.get_raw_mempool()? {
             if done.contains(&tx_id) {
                 continue;
             }
 
             let tx: Option<bitcoin::Transaction> = rpc.get_by_id(&tx_id).ok();
+            trace!("Inserting mempool tx {}", tx_id);
             match db.insert(&WithId {
                 id: tx_id,
                 data: tx,
