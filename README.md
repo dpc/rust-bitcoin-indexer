@@ -105,7 +105,9 @@ Tune your system for best performance too:
   eg. `chattr -R +C /var/lib/postgresql/9.6/`; On other FSes: disable barriers, align to SSD; you can
   mount your fs in more risky-mode for initial sync, and revert back to safe settings
   aftewards.
-* on my HDD ext4 `sudo tune2fs -o journal_data_writeback  /dev/<partition>` made a huge improvement.
+* on my HDD ext4 `sudo tune2fs -o journal_data_writeback  /dev/<partition>` some improvement, but ultimately
+  SMR disk turned out to be too slow to keep up with inserting data into > 1B records table and updating
+  indices.
 
 [perf-fs]: https://www.slideshare.net/fuzzycz/postgresql-on-ext4-xfs-btrfs-and-zfs
 [tune-psql]: https://stackoverflow.com/questions/12206600/how-to-speed-up-insertion-performance-in-postgresql
