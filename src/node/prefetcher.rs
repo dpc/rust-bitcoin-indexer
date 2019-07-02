@@ -384,7 +384,7 @@ where
                                 .get_min_height_in_progress()
                                 .expect("at least current height");
                         std::thread::sleep(Duration::from_millis(
-                            R::RECOMMENDED_ERROR_RETRY_DELAY_MS * u64::from(ahead_minimum),
+                            (1 + R::RECOMMENDED_ERROR_RETRY_DELAY_MS) * u64::from(ahead_minimum),
                         ));
                         retry_count += 1;
                         if retry_count % 10 == 0 {
