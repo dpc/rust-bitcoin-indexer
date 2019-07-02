@@ -100,7 +100,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'input' AND constraint_type = 'PRIMARY KEY'
   ) THEN
-    ALTER TABLE input ADD PRIMARY KEY (output_tx_hash_id, output_tx_idx);
+    ALTER TABLE input ADD PRIMARY KEY (output_tx_hash_id, output_tx_idx, tx_hash_id);
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS input_tx_hash_id ON input (tx_hash_id);
@@ -202,12 +202,14 @@ CREATE OR REPLACE VIEW tx_hash_ids_in_mempool AS
   WHERE tx.current_height IS NULL
   GROUP BY tx.hash_id
   HAVING count(other_tx.hash_id) = 0;
+
 CREATE OR REPLACE VIEW tx_in_mempool AS
   SELECT
     *
   FROM tx
   WHERE
     hash_id IN (SELECT * FROM tx_hash_ids_in_mempool);
+
 CREATE OR REPLACE VIEW tx_with_hash_in_mempool AS
   SELECT
     *
