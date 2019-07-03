@@ -14,6 +14,7 @@ BEGIN
     ALTER TABLE event
     ADD CONSTRAINT fk_event_block_hash_id FOREIGN KEY (block_hash_id)
       REFERENCES block(hash_id)
+      ON DELETE CASCADE
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -39,6 +40,7 @@ BEGIN
     ALTER TABLE block_tx
     ADD CONSTRAINT fk_block_tx_block_hash_id FOREIGN KEY (block_hash_id)
       REFERENCES block(hash_id)
+      ON DELETE CASCADE
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -62,6 +64,7 @@ BEGIN
       ALTER TABLE block_tx
       ADD CONSTRAINT fk_block_tx_tx_hash_id FOREIGN KEY (tx_hash_id)
           REFERENCES tx(hash_id)
+          ON DELETE CASCADE
           DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -89,6 +92,7 @@ BEGIN
     ALTER TABLE output
     ADD CONSTRAINT fk_output_tx_hash_id FOREIGN KEY (tx_hash_id)
       REFERENCES tx(hash_id)
+      ON DELETE CASCADE
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -111,6 +115,7 @@ BEGIN
     ALTER TABLE input
     ADD CONSTRAINT fk_input_tx_hash_id FOREIGN KEY (tx_hash_id)
       REFERENCES tx(hash_id)
+      ON DELETE CASCADE
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -122,6 +127,7 @@ BEGIN
     ALTER TABLE input
     ADD CONSTRAINT fk_input_output FOREIGN KEY (output_tx_hash_id, output_tx_idx)
       REFERENCES output(tx_hash_id, tx_idx)
+      ON DELETE CASCADE
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END;
@@ -145,6 +151,7 @@ $$
     )
   END;
 $$ LANGUAGE SQL IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION reverse_bytes(bytes bytea) RETURNS bytea AS
 'SELECT reverse_bytes_iter(bytes, octet_length(bytes)-1, octet_length(bytes)/2, 0)'
 LANGUAGE SQL IMMUTABLE;
@@ -152,6 +159,7 @@ LANGUAGE SQL IMMUTABLE;
 CREATE OR REPLACE FUNCTION hash_from_parts(hash_id bytea, hash_rest bytea) RETURNS bytea AS
 'SELECT reverse_bytes_iter(hash_id || hash_rest, octet_length(hash_id || hash_rest)-1, octet_length(hash_id || hash_rest)/2, 0)'
 LANGUAGE SQL IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION hash_to_hash_id(hash bytea) RETURNS bytea AS
 'SELECT reverse_bytes(substring(hash, 17, 32))'
 LANGUAGE SQL IMMUTABLE;
