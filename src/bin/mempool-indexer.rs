@@ -31,7 +31,7 @@ fn run() -> Result<()> {
         let mut inserted = 0;
         let mut failed = 0;
 
-        if done.len() > 50_000 {
+        if done.len() > 500_000 {
             done.clear();
         }
         trace!("Checking mempool");
