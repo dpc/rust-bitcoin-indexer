@@ -72,7 +72,7 @@ $$;
 
 CREATE INDEX IF NOT EXISTS tx_coinbase_eq_true ON tx (coinbase) WHERE coinbase = true;
 CREATE INDEX IF NOT EXISTS tx_mempool_ts ON tx USING brin (mempool_ts);
-CREATE INDEX IF NOT EXISTS tx_current_height ON tx USING brin (current_height);
+CREATE INDEX IF NOT EXISTS tx_current_height ON tx USING brin (current_height, mempool_ts);
 
 --- output
 DO $$
