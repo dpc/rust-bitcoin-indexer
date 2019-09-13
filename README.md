@@ -43,7 +43,7 @@ Using relational database will allow you to execute ad-hoc queries and potential
 
 rust-bitcoin-indexer was designed to have a good idempotent and reliable events streaming/subscription data model. 
 
-Electrs is used for practical purposes, rust-bitcoin-indexer (at least right now) is just a neat experiment that went far.
+Electrs is used for practical purposes, rust-bitcoin-indexer (at least right now) is just a neat experiment that gave good results and seems to be working quite well.
 
 ## Running
 
