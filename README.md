@@ -29,6 +29,22 @@ Status:
 * Indexing the blockchain works
 * Indexing mempool works
 
+## Comparing to alternatives
+
+Please take with a grain of salt, and submit PRs if any information is stale or wrong.
+
+### vs [electrs](https://github.com/romanz/electrs)
+
+Electrs uses an embedded key value store (RocksDB), while rust-bitcoin-indexer uses a normal relational data model in a Postgres that can run on a different host/cluster.
+
+Embedded KV store can be potentially more compact and potentially faster, but electrs stores the actual block data, while rust-bitcoin-indexer extracts the data it needs only and throws everything else away. Missing data could be retro-fitted from the blockchain if needed, by adding more columns and writting small program to reindex and back-fill it.
+
+Using relational database will allow you to execute ad-hoc queries and potentially share the db with other applications, without building a separate interface.
+
+rust-bitcoin-indexer was designed to have a good streaming events/reliable subscription data model. 
+
+Electrs is used for practical purposes, rust-bitcoin-indexer (at least right now) is just a neat experiment that went far.
+
 ## Running
 
 Install Rust with https://rustup.rs
