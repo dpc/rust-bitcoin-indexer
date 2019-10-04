@@ -1,43 +1,53 @@
+use diesel::sql_types::*;
+
 table! {
-    blocks (hash) {
-        id -> Int8,
-        height -> Int8,
-        hash -> Bytea,
-        prev_hash -> Bytea,
+    block (hash_id) {
+        time -> BigInt,
+        height -> Integer,
+        extinct -> Bool,
+        hash_id -> Binary,
+        hash_rest -> Binary,
+        prev_hash_id -> Binary,
+        merkle_root -> Binary,
     }
 }
 
 table! {
-    inputs (output_id) {
-        output_id -> Int8,
-        height -> Int8,
+    block_tx (block_hash_id) {
+        block_hash_id -> Binary,
+        tx_hash_id -> Binary,
     }
 }
 
 table! {
-    outputs (tx_id, tx_idx) {
-        id -> Int8,
-        height -> Int8,
-        tx_id -> Int8,
-        tx_idx -> Int4,
-        value -> Int8,
+    input (output_tx_hash_id) {
+        output_tx_idx -> Integer,
+        has_witness -> Bool,
+        output_tx_hash_id -> Binary,
+        tx_hash_id -> Binary,
+    }
+}
+
+table! {
+    output (tx_hash_id, tx_idx) {
+        value -> BigInt,
+        tx_idx -> Integer,
+        tx_hash_id -> Binary,
         address -> Nullable<Text>,
-        coinbase -> Bool,
     }
 }
 
 table! {
-    txs (hash) {
-        id -> Int8,
-        height -> Int8,
-        hash -> Bytea,
+    tx (hash_id) {
+        mempool_ts -> Nullable<Timestamp>,
+        fee -> BigInt,
+        locktime -> BigInt,
+        current_height -> Integer,
+        weight -> Integer,
         coinbase -> Bool,
+        hash_id -> Binary,
+        hash_rest -> Binary,
     }
 }
 
-allow_tables_to_appear_in_same_query!(
-    blocks,
-    inputs,
-    outputs,
-    txs,
-);
+allow_tables_to_appear_in_same_query!(block, block_tx, input, output, tx,);

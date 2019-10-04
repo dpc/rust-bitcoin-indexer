@@ -22,6 +22,7 @@ bitcoin-bech32 = "*"
 bitcoin_hashes = "0.3"
 bitcoincore-rpc = { version = "0.6", branch = "more-calls", git="https://github.com/dpc/rust-bitcoincore-rpc" }
 common_failures = "*"
+diesel = { version = "1.4", optional = true }
 failure = "*"
 hex = "0.3"
 secp256k1 = "0.12.2"

@@ -1,5 +1,7 @@
 pub mod mem;
 pub mod pg;
+#[cfg(feature = "diesel")]
+pub mod schema;
 
 use crate::{prelude::*, types::*, TxHash};
 use std::collections::BTreeMap;
