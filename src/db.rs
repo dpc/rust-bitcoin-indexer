@@ -22,7 +22,7 @@ pub trait IndexerStore {
 pub trait MempoolStore {
     fn insert_iter<'a>(
         &mut self,
-        tx: impl Iterator<Item = &'a WithHash<Option<bitcoin::Transaction>>>,
+        tx: impl Iterator<Item = &'a WithTxId<Option<bitcoin::Transaction>>>,
     ) -> Result<()>;
-    fn insert(&mut self, tx: &WithHash<Option<bitcoin::Transaction>>) -> Result<()>;
+    fn insert(&mut self, tx: &WithTxId<Option<bitcoin::Transaction>>) -> Result<()>;
 }

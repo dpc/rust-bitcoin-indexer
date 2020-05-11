@@ -5,8 +5,8 @@ use bitcoin_indexer::{
     types::WithId,
 };
 use bitcoincore_rpc::RpcApi;
-use std::{collections::HashSet, env};
 use log::trace;
+use std::{collections::HashSet, env};
 
 use common_failures::quick_main;
 

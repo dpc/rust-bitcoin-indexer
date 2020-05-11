@@ -53,22 +53,23 @@ impl Indexer {
     }
 
     fn run(&mut self) -> Result<()> {
-        let start = if let Some(last_indexed_height) = self.db.get_head_height()? {
-            info!("Last indexed block {}H", last_indexed_height);
+        let start: Option<WithHeightAndId<BlockHash, _>> =
+            if let Some(last_indexed_height) = self.db.get_head_height()? {
+                info!("Last indexed block {}H", last_indexed_height);
 
-            assert!(last_indexed_height <= self.node_starting_chainhead_height);
-            let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
-            Some(WithHeightAndId {
-                height: start_from_block,
-                id: self
-                    .db
-                    .get_hash_by_height(start_from_block)?
-                    .expect("Block hash should be there"),
-                data: (),
-            })
-        } else {
-            None
-        };
+                assert!(last_indexed_height <= self.node_starting_chainhead_height);
+                let start_from_block = last_indexed_height.saturating_sub(100); // redo 100 last blocks, in case there was a reorg
+                Some(WithHeightAndId {
+                    height: start_from_block,
+                    id: self
+                        .db
+                        .get_hash_by_height(start_from_block)?
+                        .expect("Block hash should be there"),
+                    data: (),
+                })
+            } else {
+                None
+            };
 
         let prefetcher = prefetcher::Prefetcher::new(self.rpc.clone(), start)?;
         let mut bottlecheck_fetcher = BottleCheck::new("block fetcher".into());

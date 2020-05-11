@@ -17,15 +17,14 @@ harness = false
 name = "bitcoincore_rpc"
 
 [dependencies]
-bitcoin = "0.18"
-bitcoin-bech32 = "*"
-bitcoin_hashes = "0.3"
-bitcoincore-rpc = { version = "0.6", branch = "more-calls", git="https://github.com/dpc/rust-bitcoincore-rpc" }
+bitcoin = "0.23"
+bitcoin-bech32 = "0.11"
+bitcoincore-rpc = "0.10"
 common_failures = "*"
 diesel = { version = "1.4", optional = true }
 failure = "*"
 hex = "0.3"
-secp256k1 = "0.12.2"
+secp256k1 = "0.17.2"
 crossbeam-channel = "*"
 structopt = "*"
 default = "*"

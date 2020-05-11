@@ -23,6 +23,7 @@ use log::{debug, error, info, trace};
 
 use super::*;
 use crate::{BlockHash, BlockHeight};
+use bitcoin::hash_types::Txid;
 use hex::ToHex;
 use itertools::Itertools;
 
@@ -44,21 +45,20 @@ type BlockHeightSigned = i32;
 
 /// Either `Connection` or `Transaction` for the code that needs to be generic over it
 trait GenericConnection {
-    fn query<'a>(&'a self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows>;
+    fn query<'a>(&'a self, query: &str, params: &[&dyn pg::ToSql]) -> pg::Result<pg::Rows>;
 }
 
 impl GenericConnection for pg::Connection {
-    fn query<'a>(&'a self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows> {
+    fn query<'a>(&'a self, query: &str, params: &[&dyn pg::ToSql]) -> pg::Result<pg::Rows> {
         self.query(query, params)
     }
 }
 
 impl<'a> GenericConnection for pg::Transaction<'a> {
-    fn query<'b>(&'b self, query: &str, params: &[&pg::ToSql]) -> pg::Result<pg::Rows> {
+    fn query<'b>(&'b self, query: &str, params: &[&dyn pg::ToSql]) -> pg::Result<pg::Rows> {
         self.query(query, params)
     }
 }
-
 
 /// Estabilish connection with the DB
 pub fn establish_connection(url: &str) -> pg::Connection {
@@ -77,7 +77,7 @@ fn calculate_tx_id_with_workarounds(
     block: &BlockData,
     tx: &bitcoin::blockdata::transaction::Transaction,
     network: bitcoin::Network,
-) -> Sha256dHash {
+) -> bitcoin::hash_types::Txid {
     let is_coinbase = tx.is_coin_base();
     if network != bitcoin::Network::Bitcoin {
         tx.txid()
@@ -90,29 +90,27 @@ fn calculate_tx_id_with_workarounds(
         // https://blockchair.com/bitcoin/block/91842
         // to make the unique indexes happy, we just add one to last byte
 
-        TxHash::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0")
-            .unwrap()
+        Txid::from_hex("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d885a0").unwrap()
     } else if block.height == 91880 && is_coinbase {
-        TxHash::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469")
-            .unwrap()
+        Txid::from_hex("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb469").unwrap()
     } else {
         tx.txid()
     }
 }
 
-fn write_hash_id_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
+fn write_hash_id_hex<W: std::fmt::Write>(w: &mut W, hash: &Sha256dHash) -> std::fmt::Result {
     hash.clone().into_inner()[..SQL_HASH_ID_SIZE]
         .as_ref()
         .write_hex(w)
 }
 
-fn write_hash_rest_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
+fn write_hash_rest_hex<W: std::fmt::Write>(w: &mut W, hash: &Sha256dHash) -> std::fmt::Result {
     hash.clone().into_inner()[SQL_HASH_ID_SIZE..]
         .as_ref()
         .write_hex(w)
 }
 
-fn write_hash_hex<W: std::fmt::Write>(w: &mut W, hash: &BlockHash) -> std::fmt::Result {
+fn write_hash_hex<W: std::fmt::Write>(w: &mut W, hash: &Sha256dHash) -> std::fmt::Result {
     hash.clone().into_inner().write_hex(w)
 }
 
@@ -121,7 +119,7 @@ fn write_hex<W: std::fmt::Write>(w: &mut W, hash: &[u8]) -> std::fmt::Result {
 }
 
 // TODO: go faster / simpler?
-fn hash_to_hash_id(hash: &BlockHash) -> Vec<u8> {
+fn hash_to_hash_id(hash: &Sha256dHash) -> Vec<u8> {
     hash.clone().into_inner()[..SQL_HASH_ID_SIZE].to_vec()
 }
 
@@ -254,7 +252,7 @@ impl<'a> OutputFormatter<'a> {
         let network = self.network;
         self.output.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
-            write_hash_id_hex(s, &tx_id).unwrap();
+            write_hash_id_hex(s, tx_id).unwrap();
             s.write_fmt(format_args!(
                 "'::bytea,{},{},{})",
                 vout,
@@ -286,7 +284,7 @@ impl<'a> InputFormatter<'a> {
     fn fmt(&mut self, tx_id: &Sha256dHash, input: &bitcoin::TxIn) {
         self.input.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
-            write_hash_id_hex(s, &input.previous_output.txid).unwrap();
+            write_hash_id_hex(s, &input.previous_output.txid.as_hash()).unwrap();
             s.write_fmt(format_args!("'::bytea,{},'\\x", input.previous_output.vout))
                 .unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
@@ -314,7 +312,7 @@ impl<'a> BlockTxFormatter<'a> {
     fn fmt(&mut self, block: &BlockData, tx_id: &Sha256dHash) {
         self.block_tx.fmt_with(move |s| {
             s.write_str("('\\x").unwrap();
-            write_hash_id_hex(s, &block.id).unwrap();
+            write_hash_id_hex(s, &block.id.as_hash()).unwrap();
             s.write_str("'::bytea,'\\x").unwrap();
             write_hash_id_hex(s, &tx_id).unwrap();
             s.write_str("'::bytea)").unwrap();
@@ -431,7 +429,7 @@ impl<'a> TxFormatter<'a> {
         } else {
             let input_value_sum = tx.input.iter().fold(0, |acc, input| {
                 let p = HashIdOutPoint {
-                    tx_hash_id: hash_to_hash_id(&input.previous_output.txid),
+                    tx_hash_id: hash_to_hash_id(&input.previous_output.txid.as_hash()),
                     vout: input.previous_output.vout,
                 };
                 acc + self.inputs_utxo_map[&p].value
@@ -507,22 +505,22 @@ impl<'a> BlockFormatter<'a> {
     fn fmt_one(&mut self, block: &BlockData) {
         self.event.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
-            write_hash_id_hex(s, &block.id).unwrap();
+            write_hash_id_hex(s, &block.id.as_hash()).unwrap();
             s.write_str("'::bytea)").unwrap();
         });
 
         self.block.fmt_with(|s| {
             s.write_str("('\\x").unwrap();
-            write_hash_id_hex(s, &block.id).unwrap();
+            write_hash_id_hex(s, &block.id.as_hash()).unwrap();
 
             s.write_str("'::bytea,'\\x").unwrap();
-            write_hash_rest_hex(s, &block.id).unwrap();
+            write_hash_rest_hex(s, &block.id.as_hash()).unwrap();
 
             s.write_str("'::bytea,'\\x").unwrap();
-            write_hash_id_hex(s, &block.data.header.prev_blockhash).unwrap();
+            write_hash_id_hex(s, &block.data.header.prev_blockhash.as_hash()).unwrap();
 
             s.write_str("'::bytea,'\\x").unwrap();
-            write_hash_hex(s, &block.data.header.merkle_root).unwrap();
+            write_hash_hex(s, &block.data.header.merkle_root.as_hash()).unwrap();
 
             s.write_fmt(format_args!(
                 "'::bytea,{},{})",
@@ -537,8 +535,8 @@ impl<'a> BlockFormatter<'a> {
 
         for (tx_i, tx) in block.data.txdata.iter().enumerate() {
             let tx_id = &self.tx_ids[&(block.height, tx_i)];
-            self.tx_fmt.fmt(Some(block.height), tx, tx_id);
-            self.block_tx_fmt.fmt(block, tx_id);
+            self.tx_fmt.fmt(Some(block.height), tx, &tx_id.as_hash());
+            self.block_tx_fmt.fmt(block, &tx_id.as_hash());
         }
     }
 }
@@ -571,7 +569,7 @@ fn fmt_fetch_outputs_sql<'a>(outputs: impl Iterator<Item = &'a HashIdOutPoint>) 
 }
 
 fn fetch_outputs<'a>(
-    conn: &GenericConnection,
+    conn: &dyn GenericConnection,
     outputs: impl Iterator<Item = &'a HashIdOutPoint>,
 ) -> Result<UtxoDetailsMap> {
     let mut out = HashMap::new();
@@ -623,7 +621,7 @@ impl HashIdOutPoint {
 impl From<bitcoin::OutPoint> for HashIdOutPoint {
     fn from(p: bitcoin::OutPoint) -> Self {
         Self {
-            tx_hash_id: hash_to_hash_id(&p.txid),
+            tx_hash_id: hash_to_hash_id(&p.txid.as_hash()),
             vout: p.vout,
         }
     }
@@ -650,7 +648,7 @@ impl UtxoSetCache {
     /// Returns map of details of all spent outputs (for fee calculation).
     fn process_blocks(
         &mut self,
-        conn: &GenericConnection,
+        conn: &dyn GenericConnection,
         blocks: &[crate::BlockData],
         tx_ids: &TxIdMap,
     ) -> Result<UtxoDetailsMap> {
@@ -678,7 +676,7 @@ impl UtxoSetCache {
                 for (idx, output) in tx.output.iter().enumerate() {
                     let txid = &tx_ids[&(block.height, tx_i)];
                     self.insert(
-                        HashIdOutPoint::from_tx_hash_and_idx(txid, idx as u32),
+                        HashIdOutPoint::from_tx_hash_and_idx(&txid.as_hash(), idx as u32),
                         output.value,
                     );
                 }
@@ -726,7 +724,7 @@ impl UtxoSetCache {
 
     fn fetch_missing_utxos(
         &self,
-        conn: &GenericConnection,
+        conn: &dyn GenericConnection,
         missing: &[HashIdOutPoint],
     ) -> Result<UtxoDetailsMap> {
         if missing.is_empty() {
@@ -846,7 +844,10 @@ impl Mode {
 
     fn to_sql_query_str(self) -> &'static str {
         match self {
-            Mode::FreshBulk => concat!(include_str!("pg/mode_fresh.sql"), include_str!("pg/init.sql")),
+            Mode::FreshBulk => concat!(
+                include_str!("pg/mode_fresh.sql"),
+                include_str!("pg/init.sql")
+            ),
             Mode::Bulk => include_str!("pg/mode_bulk.sql"),
             Mode::Normal => include_str!("pg/mode_normal.sql"),
         }
@@ -875,7 +876,7 @@ impl fmt::Display for Mode {
 ///
 /// Mainly used so that we don't have to recalculate txids many times
 /// (it's quite expensive).
-type TxIdMap = HashMap<(BlockHeight, usize), BlockHash>;
+type TxIdMap = HashMap<(BlockHeight, usize), Txid>;
 
 fn tx_id_map_from_blocks(
     blocks: &[crate::BlockData],
@@ -1524,7 +1525,7 @@ impl IndexerStore {
             }
             prev_height = Some(block.height);
 
-            let block_hash_id = hash_to_hash_id(&block.id);
+            let block_hash_id = hash_to_hash_id(&block.id.as_hash());
 
             match Self::read_db_block_extinct_by_hash_id_trans(&transaction, &block_hash_id)? {
                 Some(false) => panic!(
@@ -1769,7 +1770,7 @@ impl MempoolStore {
 
     fn insert_tx_data(
         &mut self,
-        tx_id: &TxHash,
+        tx_id: &Txid,
         tx: &bitcoin::Transaction,
         utxo_map: UtxoDetailsMap,
     ) -> Result<()> {
@@ -1785,7 +1786,7 @@ impl MempoolStore {
             utxo_map,
         );
 
-        formatter.fmt(None, tx, tx_id);
+        formatter.fmt(None, tx, &tx_id.as_hash());
 
         drop(formatter);
 
@@ -1800,7 +1801,7 @@ impl MempoolStore {
 impl super::MempoolStore for MempoolStore {
     fn insert_iter<'a>(
         &mut self,
-        txs: impl Iterator<Item = &'a WithHash<Option<bitcoin::Transaction>>>,
+        txs: impl Iterator<Item = &'a WithTxId<Option<bitcoin::Transaction>>>,
     ) -> Result<()> {
         // maybe one day we can optimize, right now just loop
         for tx in txs {
@@ -1809,7 +1810,7 @@ impl super::MempoolStore for MempoolStore {
         Ok(())
     }
 
-    fn insert(&mut self, tx: &WithHash<Option<bitcoin::Transaction>>) -> Result<()> {
+    fn insert(&mut self, tx: &WithTxId<Option<bitcoin::Transaction>>) -> Result<()> {
         let tx_id = tx.id;
 
         if let Some(ref tx) = tx.data {
@@ -1824,7 +1825,7 @@ impl super::MempoolStore for MempoolStore {
                 if utxo_map.len() != tx.input.len() {
                     bail!("Couldn't find all inputs for tx {}", tx_id);
                 }
-                self.insert_tx_data(&tx_id, tx, utxo_map)?;
+                self.insert_tx_data(&Txid::from(tx_id), tx, utxo_map)?;
             }
         }
 
