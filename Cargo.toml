@@ -18,7 +18,6 @@ name = "bitcoincore_rpc"
 
 [dependencies]
 bitcoin = "0.23"
-bitcoin-bech32 = "0.11"
 bitcoincore-rpc = "0.10"
 common_failures = "*"
 diesel = { version = "1.4", optional = true }
