@@ -1,8 +1,6 @@
 use log::{debug, info, trace};
 
-use crate::{
-    prelude::*, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, Sha256dHash, WithHeightAndId,
-};
+use crate::{prelude::*, BlockHeight, Rpc, RpcBlock, RpcBlockWithPrevId, WithHeightAndId};
 use bitcoincore_rpc::RpcApi;
 use common_failures::prelude::*;
 use std::{
@@ -35,7 +33,7 @@ fn retry<T>(mut f: impl FnMut() -> Result<T>) -> T {
 
 impl Rpc for bitcoincore_rpc::Client {
     type Data = Box<bitcoin::Block>;
-    type Id = Sha256dHash;
+    type Id = bitcoin::hash_types::BlockHash;
     const RECOMMENDED_HEAD_RETRY_DELAY_MS: u64 = 2000;
     const RECOMMENDED_ERROR_RETRY_DELAY_MS: u64 = 100;
 
@@ -432,16 +430,17 @@ where
         height: BlockHeight,
     ) -> Result<Option<RpcBlockWithPrevId<R>>> {
         if let Some(id) = self.rpc.get_block_id_by_height(height)? {
-            Ok(self.rpc.get_block_by_id(&id)?.map(|block| {
-                (RpcBlockWithPrevId {
+            Ok(self
+                .rpc
+                .get_block_by_id(&id)?
+                .map(|block| RpcBlockWithPrevId {
                     block: WithHeightAndId {
                         height,
                         id,
                         data: block.0,
                     },
                     prev_block_id: block.1,
-                })
-            }))
+                }))
         } else {
             Ok(None)
         }

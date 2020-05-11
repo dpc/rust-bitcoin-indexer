@@ -1,4 +1,6 @@
-pub use bitcoin_hashes::{hex::FromHex as _, Hash as _};
+pub use bitcoin::hash_types::{BlockHash, Txid};
+pub use bitcoin::hashes::{hash160::Hash as Hash160, sha256d::Hash as Sha256dHash};
+pub use bitcoin::hashes::{hex::FromHex as _, Hash};
 
 /// Data in a block
 ///
@@ -17,9 +19,9 @@ pub struct WithId<H, D = ()> {
 }
 
 pub type WithHash<T> = WithId<Sha256dHash, T>;
+pub type WithTxId<T> = WithId<Txid, T>;
 
 pub type BlockHeight = u32;
-pub type BlockHash = Sha256dHash;
 
 pub struct BlockHeightAndHash {
     pub height: BlockHeight,
@@ -29,7 +31,6 @@ pub struct BlockHeightAndHash {
 /// Block data from BitcoinCore (`rust-bitcoin`)
 pub type BlockData = WithHeightAndId<BlockHash, Box<bitcoin::Block>>;
 
-pub use bitcoin_hashes::{hash160::Hash as Hash160, sha256d::Hash as Sha256dHash};
 pub type BlockHex = String;
 pub type TxHex = String;
 pub type TxHash = Sha256dHash;
