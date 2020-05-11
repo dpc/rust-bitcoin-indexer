@@ -35,15 +35,20 @@ Please take with a grain of salt, and submit PRs if any information is stale or 
 
 ### vs [electrs](https://github.com/romanz/electrs)
 
-Electrs uses an embedded key value store (RocksDB), while rust-bitcoin-indexer uses a normal relational data model in a Postgres that can run on a different host/cluster.
+`electrs` uses an embedded key value store (RocksDB) to locally maintain addtitional indices. When needed it queries the fullnode itself for block/tx data. `rust-bitcoin-indexer` uses a normal relational database model, with decompressed data stored in a standalone Postgres instance that can run on a different host/cluster.
 
-Embedded KV store can be potentially more compact and faster, but electrs stores the actual block data, while rust-bitcoin-indexer extracts only the data it needs and throws everything else away. Missing data could be retro-fitted from the blockchain if needed, by adding more columns and writting small program to reindex and back-fill it.
+Embedded KV store approach has many advantages:
 
-Using relational database will allow you to execute ad-hoc queries and potentially share the db with other applications, without building a separate interface. You can add and remove indices according to your needs.
+* naturally good indexing performance and less disk space usage
+* all the data is always available as a raw block/tx data (while with `rust-bitcoin-indexer` one would have to modify the schema, and then extract and retro-fit it with a small piece of code).
 
-rust-bitcoin-indexer was designed to have a good idempotent and reliable events streaming/subscription data model. 
+Using relational database will allow you to execute ad-hoc queries and potentially share the db with other applications, without building a separate interface. You can add and remove indices according to your needs, etc.
 
-Electrs is used for practical purposes, rust-bitcoin-indexer (at least right now) is just a neat experiment that gave good results and seems to be working quite well.
+`rust-bitcoin-indexer` was designed to have a good idempotent and reliable events streaming/subscription data model. 
+
+`electrs` is used for practical purposes, `rust-bitcoin-indexer` (at least right now) is just a neat experiment that gave good results and seems to be working quite well.
+
+Looking back, I think `electrs` model is esier, faster, and more robust approach for most applications, and I haven't used it mostly because I was unware of all the aspects of problem at hand ¯\\\_(ツ)\_/¯. However I am still very happy with results achived with `rust-bitcoin-indexer`. It's compact, relatively small (memory-usage & LoC-wise) and squizes every last drop of performance to make indexing to a general-purpose database practical. And running random SQL queries against Bitcoin's blockchain data is just very fun. `rust-bitcoin-indexer` can be also a good example how to quickly dump billions of rows worth of SQL data into Postgres.
 
 ## Running
 
