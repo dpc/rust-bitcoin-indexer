@@ -1,3 +1,7 @@
+#[cfg_attr(feature = "diesel", macro_use)]
+#[cfg(feature = "diesel")]
+extern crate diesel;
+
 pub mod db;
 pub mod event_source;
 pub mod node;
