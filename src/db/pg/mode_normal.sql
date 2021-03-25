@@ -203,6 +203,7 @@ CREATE OR REPLACE VIEW tx_with_block AS
 -- select all txes that have null `current_height`, and which outputs were not used by any other tx yet
 -- BUG: to **really** check if something is in the mempool, we would have to double check
 -- if all the outputs it uses are also in the mempool or unspent **recursively** which is hard to do in SQL
+-- Actually: recursive SQL queries are a thing, Postrgres supports them well and they might just work. TBD. 
 CREATE OR REPLACE VIEW tx_hash_ids_in_mempool AS
   SELECT
     tx.hash_id
