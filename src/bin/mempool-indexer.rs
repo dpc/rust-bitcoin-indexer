@@ -1,4 +1,3 @@
-use bitcoin;
 use bitcoin_indexer::{
     db::{self, MempoolStore},
     prelude::*,

@@ -124,7 +124,7 @@ where
         let thread_num = num_cpus::get() * 2;
         let workers_finish = Arc::new(AtomicBool::new(false));
 
-        let end_of_fast_sync = retry(|| Ok(rpc.get_block_count()?));
+        let end_of_fast_sync = retry(|| rpc.get_block_count());
         let mut prev_hashes = BTreeMap::default();
         let start = if let Some(h_and_hash) = last_block {
             let h = h_and_hash.height;

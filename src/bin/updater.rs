@@ -11,7 +11,7 @@ fn run() -> Result<()> {
     let node_url = env::var("NODE_RPC_URL")?;
 
     let rpc_info = bitcoin_indexer::RpcInfo::from_url(&node_url)?;
-    let db = db::pg::establish_connection(&db_url);
+    let mut db = db::pg::establish_connection(&db_url);
     db.execute(
         "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS merkle_root BYTEA",
         &[],
@@ -25,12 +25,12 @@ fn run() -> Result<()> {
     let fetcher = fetcher::Fetcher::new(Arc::new(rpc), None, None)?;
 
     for batch in &fetcher.chunks(1000) {
-        let transaction = db.transaction()?;
+        let mut transaction = db.transaction()?;
         for (i, item) in batch.enumerate() {
             if i == 0 {
                 eprintln!("Block {}H: {}", item.height, item.id);
             }
-            db.execute(
+            transaction.execute(
                 "UPDATE blocks SET time = $1, merkle_root = $2 WHERE hash = $3",
                 &[
                     &(i64::from(item.data.header.time)),
