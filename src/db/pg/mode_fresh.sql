@@ -7,6 +7,6 @@ DROP TABLE IF EXISTS event CASCADE;
 -- but not this one!
 -- DROP TABLE IF EXISTS indexer_state CASCADE;
 
-DROP FUNCTION IF EXISTS reverse_bytes_iter CASCADE;
-DROP FUNCTION IF EXISTS hash_from_parts CASCADE;
-DROP FUNCTION IF EXISTS hash_to_hash_id CASCADE;
+DROP FUNCTION IF EXISTS reverse_bytes_iter(bytes bytea, length int, midpoint int, index int) CASCADE;
+DROP FUNCTION IF EXISTS hash_from_parts(hash_id bytea, hash_rest bytea) CASCADE;
+DROP FUNCTION IF EXISTS hash_to_hash_id(hash bytea) CASCADE;
