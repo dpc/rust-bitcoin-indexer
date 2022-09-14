@@ -1,0 +1,30 @@
+name: Prod
+
+on:
+  push:
+    branches: [production]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Prod - Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          project_id: ${{ secrets.GCP_PROD_PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_PROD_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Install GCloud Components
+        run: |
+          # Needed for kubectl auth 
+          # https://cloud.google.com/blog/products/containers-kubernetes/kubectl-auth-changes-in-gke
+          gcloud components install gke-gcloud-auth-plugin
+
+      - name: Rollout
+        run: |
+          make image/build/prod
+          make image/push/prod
+          make k8s/rollout/prod

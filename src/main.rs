@@ -18,6 +18,8 @@ struct Indexer {
 
 impl Indexer {
     fn new(config: Config) -> Result<Self> {
+        println!("{}",&config.node_url);
+
         let rpc_info = bitcoin_indexer::RpcInfo::from_url(&config.node_url)?;
         let rpc = rpc_info.to_rpc_client()?;
         let rpc = Arc::new(rpc);

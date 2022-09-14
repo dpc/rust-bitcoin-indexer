@@ -5,4 +5,4 @@ COPY . .
 
 RUN cargo install --path .
 
-CMD ["bitcoin-indexer"]
+CMD ["/usr/local/cargo/bin/bitcoin-indexer"]
